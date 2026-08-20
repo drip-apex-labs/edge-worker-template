@@ -7,12 +7,11 @@
     "SHOP_ID": "",
     "ORIGIN_URL": "",
     "CONFIG_API_URL": "",
-    "CONFIG_CACHE_MODE": "",
-    "RATE_LIMIT_WINDOW_MS": "",
-    "RATE_LIMIT_MAX_PROXY_REQUESTS_PER_IP": "",
-    "RATE_LIMIT_MAX_PROXY_REQUESTS_PER_SHOP": "",
-    "ORIGIN_FETCH_TIMEOUT_MS": "",
-    "MAX_MUTATION_BYTES": "",
-    "MAX_CONFIG_BYTES": ""
-  }
+    "CONFIG_CACHE_MODE": "kv"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "APEX_EDGE_CACHE"
+    }
+  ]
 }

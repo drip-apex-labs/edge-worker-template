@@ -1,4 +1,4 @@
-// Apex Edge Worker v1.0.0 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
+// Apex Edge Worker v1.1.1 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
 // ../event-schema/src/experiment-servability.ts
 function isExperimentServable(experiment, context) {
   if (!experiment || experiment.runtime_disabled === true) return false;
@@ -196,8 +196,30 @@ function weekdayScheduleBlocksDelivery2(schedule, now) {
 }
 
 // ../edge-engine/src/sdk-injection-rewriter.ts
+function escapeHtmlAttribute(value) {
+  return value.replace(/[&"'<>]/g, (character) => ({
+    "&": "&amp;",
+    '"': "&quot;",
+    "'": "&#39;",
+    "<": "&lt;",
+    ">": "&gt;"
+  })[character]);
+}
+function resolveSdkScriptUrl(shopId, advertised) {
+  if (advertised) {
+    try {
+      const url = new URL(advertised);
+      if (url.protocol === "https:" && url.username === "" && url.password === "") {
+        return url.toString();
+      }
+    } catch {
+    }
+  }
+  return `https://events.drip-apex.com/s/${encodeURIComponent(shopId)}.js`;
+}
 function appendSdkWhenMissing(rewriter, options) {
   const encodedShopId = encodeURIComponent(options.shopId);
+  const scriptUrl = resolveSdkScriptUrl(options.shopId, options.scriptUrl);
   const state = { found: false, inserted: false };
   const markFound = (element) => {
     state.found = true;
@@ -205,6 +227,7 @@ function appendSdkWhenMissing(rewriter, options) {
   };
   rewriter.on('script[src^="https://events.drip-apex.com/s/"]', { element: markFound });
   rewriter.on('script[src^="https://sdk.drip-apex.com/"]', { element: markFound });
+  rewriter.on(`script[src="${scriptUrl.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"]`, { element: markFound });
   rewriter.on(`script[src$="/s/${encodedShopId}.js"]`, { element: markFound });
   rewriter.on(`script[src*="/s/${encodedShopId}.js?"]`, { element: markFound });
   rewriter.on("script[data-apex-install-surface]", { element: markFound });
@@ -1240,15 +1263,17 @@ async function fetchShopConfig(input) {
     else await write;
     return { config, source: "network" };
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     if (kvEntry) {
       const staleConfig = parseConfig(kvEntry.raw);
-      if (staleConfig) return { config: staleConfig, source: "stale" };
+      if (staleConfig) return { config: staleConfig, source: "stale", error: message };
     }
     const stale = await readCachedConfig(cache, cacheKey);
-    if (stale) return { config: stale, source: "stale" };
+    if (stale) return { config: stale, source: "stale", error: message };
     return {
       config: null,
-      source: error instanceof ConfigResponseTooLargeError ? "oversized" : "none"
+      source: error instanceof ConfigResponseTooLargeError ? "oversized" : "none",
+      error: message
     };
   }
 }
@@ -1272,7 +1297,7 @@ function classifyRequest(request) {
 }
 
 // src/version.ts
-var EDGE_WORKER_VERSION = "1.0.0";
+var EDGE_WORKER_VERSION = "1.1.1";
 var MINIMUM_COMPATIBLE_ENGINE_VERSION_FIELD = "minimumEdgeEngineVersion";
 function parseVersion(value) {
   const match = value.trim().match(
@@ -1321,11 +1346,11 @@ function compareEngineVersions(left, right) {
   }
   return 0;
 }
-function decideVersionGuard(payload) {
+function decideVersionGuard(payload, workerVersion = EDGE_WORKER_VERSION) {
   const required = payload[MINIMUM_COMPATIBLE_ENGINE_VERSION_FIELD];
   if (required == null) return "edge";
   if (typeof required !== "string" || !required.trim()) return "sdk-only";
-  const comparison = compareEngineVersions(EDGE_WORKER_VERSION, required);
+  const comparison = compareEngineVersions(workerVersion, required);
   return comparison !== null && comparison >= 0 ? "edge" : "sdk-only";
 }
 
@@ -1417,7 +1442,6 @@ var ApexRateLimiterDO = class {
 var EVENTS_UPSTREAM_URL = "https://events.drip-apex.com/v1/events";
 var REPLAY_UPSTREAM_URL = "https://events.drip-apex.com/replay-blocks";
 var EDGE_HTML_CACHE_TTL_SECONDS = 15;
-var CLIENT_SNIPPET_BASE_URL = "https://events.drip-apex.com/s/";
 var DEFAULT_PROXY_RATE_LIMIT_WINDOW_MS = 6e4;
 var DEFAULT_PROXY_RATE_LIMIT_MAX_PER_IP = 300;
 var DEFAULT_PROXY_RATE_LIMIT_MAX_PER_SHOP = 1e4;
@@ -1427,6 +1451,7 @@ var DEFAULT_MAX_CONFIG_BYTES = 2 * 1024 * 1024;
 var proxyRateLimitBuckets = /* @__PURE__ */ new Map();
 var proxyRateLimitRequestCount = 0;
 var lastConfigSources = /* @__PURE__ */ new Map();
+var lastConfigErrors = /* @__PURE__ */ new Map();
 function resolveCustomerAssignmentInputs(config, requestUrl, cookieHeader, strictConsentPending) {
   const forceMap = resolveEdgeForceMap(requestUrl, cookieHeader);
   return {
@@ -1628,11 +1653,12 @@ async function proxyEvents(request, env, upstreamUrl = EVENTS_UPSTREAM_URL) {
   }
   return withWorkerVersion(response, "events-proxy");
 }
-function appendClientSdkWhenMissing(rewriter, shopId, useEventProxy) {
+function appendClientSdkWhenMissing(rewriter, shopId, useEventProxy, scriptUrl) {
   const proxyAttributes = useEventProxy ? ` data-apex-events-endpoint="${EVENTS_PATH}" data-apex-server-signed-events="1"` : "";
   appendSdkWhenMissing(rewriter, {
     shopId,
-    buildInjectedTag: (encodedShopId) => `<script src="${CLIENT_SNIPPET_BASE_URL}${encodedShopId}.js" data-apex-install-surface="customer_edge_worker"${proxyAttributes}><\/script>`,
+    scriptUrl,
+    buildInjectedTag: (encodedShopId) => `<script src="${escapeHtmlAttribute(resolveSdkScriptUrl(shopId, scriptUrl))}" data-apex-install-surface="customer_edge_worker"${proxyAttributes}><\/script>`,
     onFound: useEventProxy ? (element) => {
       element.setAttribute("data-apex-events-endpoint", EVENTS_PATH);
       element.setAttribute("data-apex-server-signed-events", "1");
@@ -1642,13 +1668,13 @@ function appendClientSdkWhenMissing(rewriter, shopId, useEventProxy) {
 function isHtmlResponse(response) {
   return (response.headers.get("Content-Type") ?? "").toLowerCase().includes("text/html");
 }
-async function sdkOnlyResponse(request, env, targetUrl, skippedCount = 0) {
+async function sdkOnlyResponse(request, env, targetUrl, skippedCount = 0, scriptUrl) {
   const origin = await fetchOrigin(request, env, targetUrl);
   if (!isHtmlResponse(origin)) {
     return withWorkerVersion(origin, "sdk-only-passthrough", skippedCount);
   }
   const rewriter = new HTMLRewriter();
-  appendClientSdkWhenMissing(rewriter, env.SHOP_ID, Boolean(env.APEX_INGEST_TOKEN?.trim()));
+  appendClientSdkWhenMissing(rewriter, env.SHOP_ID, Boolean(env.APEX_INGEST_TOKEN?.trim()), scriptUrl);
   return withWorkerVersion(rewriter.transform(origin), "sdk-only", skippedCount);
 }
 function buildCustomerHtmlCacheKey(requestUrl, env, assignments, runtimeEnabled, cohort, holdoutConfigEpoch, publicationRevision) {
@@ -1733,8 +1759,9 @@ async function handleStatusRequest(request, env) {
     originUrl: originUrlValid ? sanitizeStatusUrl(env.ORIGIN_URL) : "invalid",
     configApiUrl: !configApiUrlValid ? "invalid" : sanitizeStatusUrl(resolveConfigApiUrl(env), true),
     ingestTokenSet,
-    configCacheMode: env.CONFIG_KV && env.CONFIG_CACHE_MODE !== "off" ? "kv" : "off",
+    configCacheMode: env.APEX_EDGE_CACHE && env.CONFIG_CACHE_MODE !== "off" ? "kv" : "off",
     lastConfigSource: lastConfigSources.get(env.SHOP_ID) ?? "none",
+    lastConfigError: lastConfigErrors.get(env.SHOP_ID) ?? null,
     rateLimitScope: env.RATE_LIMIT_DO ? "global-do" : "per-isolate",
     edgeModeHint: configured && ingestTokenSet ? "edge" : "sdk-only",
     ...!configured ? { problems } : {}
@@ -1763,12 +1790,20 @@ async function handleHtmlRequest(request, env, ctx) {
   const configResult = await fetchShopConfig({
     shopId: env.SHOP_ID,
     configuredUrl: env.CONFIG_API_URL,
-    kv: env.CONFIG_KV,
+    kv: env.APEX_EDGE_CACHE,
     cacheMode: env.CONFIG_CACHE_MODE === "off" ? "off" : "kv",
     maxResponseBytes: maxConfigBytes,
     waitUntil: (promise) => ctx.waitUntil(promise)
   });
   lastConfigSources.set(env.SHOP_ID, configResult.source);
+  if (configResult.error) {
+    lastConfigErrors.set(env.SHOP_ID, {
+      message: configResult.error.slice(0, 200),
+      at: (/* @__PURE__ */ new Date()).toISOString()
+    });
+  } else if (configResult.source === "network") {
+    lastConfigErrors.delete(env.SHOP_ID);
+  }
   if (!configResult.config) {
     if (configResult.source === "oversized") {
       return sdkOnlyResponse(request, env, edgeRequestUrl.url, 1);
@@ -1779,10 +1814,10 @@ async function handleHtmlRequest(request, env, ctx) {
     );
   }
   if (getConfigByteLength(configResult.config) > maxConfigBytes) {
-    return sdkOnlyResponse(request, env, edgeRequestUrl.url, 1);
+    return sdkOnlyResponse(request, env, edgeRequestUrl.url, 1, configResult.config.delivery?.scriptUrl);
   }
   if (decideVersionGuard(configResult.config) === "sdk-only" || !env.APEX_INGEST_TOKEN?.trim()) {
-    return sdkOnlyResponse(request, env, edgeRequestUrl.url);
+    return sdkOnlyResponse(request, env, edgeRequestUrl.url, 0, configResult.config.delivery?.scriptUrl);
   }
   const config = configResult.config;
   const cookieHeader = request.headers.get("Cookie");
@@ -1888,7 +1923,7 @@ async function handleHtmlRequest(request, env, ctx) {
     holdoutConfigEpoch
   ) : "";
   appendEdgeRuntimeScript(rewriter, runtimeScript, "");
-  appendClientSdkWhenMissing(rewriter, env.SHOP_ID, true);
+  appendClientSdkWhenMissing(rewriter, env.SHOP_ID, true, config.delivery?.scriptUrl);
   const transformed = rewriter.transform(origin);
   const headers = new Headers(transformed.headers);
   headers.delete("Content-Length");
