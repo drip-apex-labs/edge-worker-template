@@ -1,4 +1,4 @@
-// Apex Edge Worker v1.1.1 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
+// Apex Edge Worker v1.1.2 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
 // ../event-schema/src/experiment-servability.ts
 function isExperimentServable(experiment, context) {
   if (!experiment || experiment.runtime_disabled === true) return false;
@@ -1297,7 +1297,7 @@ function classifyRequest(request) {
 }
 
 // src/version.ts
-var EDGE_WORKER_VERSION = "1.1.1";
+var EDGE_WORKER_VERSION = "1.1.2";
 var MINIMUM_COMPATIBLE_ENGINE_VERSION_FIELD = "minimumEdgeEngineVersion";
 function parseVersion(value) {
   const match = value.trim().match(
