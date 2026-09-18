@@ -1,4 +1,52 @@
-// Apex Edge Worker v1.1.5 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
+// Apex Edge Worker v1.2.0 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
+// src/limits.ts
+var DEFAULT_ORIGIN_FETCH_TIMEOUT_MS = 5e3;
+var DEFAULT_MAX_MUTATION_BYTES = 256 * 1024;
+var DEFAULT_MAX_CONFIG_BYTES = 2 * 1024 * 1024;
+
+// ../edge-engine/src/edge-guard-constants.ts
+var DEFAULT_CAP = 24;
+var LOOP_FRAME_LIMIT = 6;
+var CONSECUTIVE_FRAME_MS = 34;
+var GUARD_TIMEOUT_MS = 8e3;
+
+// ../edge-engine/src/edge-guard.ts
+function buildEdgeGuard(preApplied) {
+  if (preApplied.length === 0) {
+    return `var edgeGuardInstalled=false;
+var edgeDiagnostics={reasserts_count:0,revert_loops_detected:0,first_revert_ms:null};`;
+  }
+  return `var preApplied=${JSON.stringify(preApplied).replace(/</g, "\\u003c")};
+var edgeGuardInstalled=false;
+var edgeDiagnostics={reasserts_count:0,revert_loops_detected:0,first_revert_ms:null};
+(function(){
+var seen=new Set(),handedOff=false,stopped=false,pending=false,last=-Infinity,consecutive=0,observer,timer,landing=location.href;
+function stop(){if(stopped)return;stopped=true;if(observer)observer.disconnect();clearTimeout(timer);document.removeEventListener('DOMContentLoaded',ready);emitEdgePerf();}
+window.__dripEdgeGuardHandoff=function(){handedOff=true;emitEdgePerf();if(!preApplied.some(function(m){return m.a==='remove';}))stop();return edgeDiagnostics;};
+function remember(el){var keys=el.getAttribute('data-drip-edge-applied');if(keys)keys.split(/\\s+/).forEach(function(key){if(key)seen.add(key);});}
+function scan(root){if(!root)return;if(root.nodeType!==1&&root.nodeType!==9)return;if(root.getAttribute)remember(root);Array.prototype.forEach.call(root.querySelectorAll('[data-drip-edge-applied]'),remember);}
+function ready(){scan(document);schedule();}
+function targets(m){try{return Array.prototype.slice.call(document.querySelectorAll(m.s));}catch(e){return [];}}
+function relevant(records){return preApplied.some(function(m){var nodes=targets(m);try{return records.some(function(r){var n=r.target.nodeType===1?r.target:r.target.parentElement;return nodes.some(function(el){return n&&(n===el||n===el.parentElement||n.contains(el)||el.contains(n));})||Array.prototype.some.call(r.addedNodes,function(n){return n.nodeType===1&&(n.matches(m.s)||n.querySelector(m.s));});});}catch(e){return false;}});}
+function repair(){pending=false;if(stopped||!document.body)return;var changed=false;
+if(handedOff&&location.href!==landing){stop();return;}
+preApplied.forEach(function(m){if(m.a!=='remove'&&(handedOff||!seen.has(m.e+':'+m.i)))return;targets(m).forEach(function(el){
+if(m.a==='text'||m.a==='setText'){if(el.textContent!==m.t){el.textContent=m.t;changed=true;}}
+else if(m.a==='html'){var template=document.createElement('template');template.innerHTML=m.h;if(el.innerHTML!==template.innerHTML){el.innerHTML=template.innerHTML;changed=true;}}
+else if(m.a==='attribute'){Object.keys(m.at||{}).forEach(function(k){var v=m.at[k];if(el.getAttribute(k)!==v){if(v===null)el.removeAttribute(k);else el.setAttribute(k,v);changed=true;}});}
+else if(m.a==='style'||m.a==='setStyle'){Object.keys(m.st||{}).forEach(function(k){var probe=document.createElement('span');probe.setAttribute('style',k+':'+m.st[k]);var v=probe.style.getPropertyValue(k),priority=probe.style.getPropertyPriority(k);if(el.style.getPropertyValue(k)!==v||el.style.getPropertyPriority(k)!==priority){el.style.setProperty(k,v,priority);changed=true;}});}
+else if(m.a==='remove'){el.remove();changed=true;}
+else if(m.k&&el.parentElement){var exists=Array.prototype.some.call(el.parentElement.children,function(n){return n.getAttribute('data-drip-inserted')===m.k;});if(!exists){el.insertAdjacentHTML(m.a==='insertBefore'?'beforebegin':'afterend',m.h);changed=true;}}
+});});
+if(observer)observer.takeRecords();if(!changed)return;
+var now=performance.now();if(edgeDiagnostics.first_revert_ms===null)edgeDiagnostics.first_revert_ms=now;
+edgeDiagnostics.reasserts_count++;consecutive=now-last<${CONSECUTIVE_FRAME_MS}?consecutive+1:1;last=now;
+if(edgeDiagnostics.reasserts_count>=${DEFAULT_CAP}||consecutive>=${LOOP_FRAME_LIMIT}){edgeDiagnostics.revert_loops_detected++;stop();}}
+function schedule(){if(stopped||pending)return;pending=true;Promise.resolve().then(repair);}
+if(typeof MutationObserver==='function'&&document.documentElement){edgeGuardInstalled=true;scan(document);observer=new MutationObserver(function(records){scan(document);records.forEach(function(r){Array.prototype.forEach.call(r.removedNodes,scan);});if(relevant(records))schedule();});observer.observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true});timer=setTimeout(stop,${GUARD_TIMEOUT_MS});document.addEventListener('DOMContentLoaded',ready,{once:true});}
+})();`;
+}
+
 // ../event-schema/src/experiment-servability.ts
 function isExperimentServable(experiment, context) {
   if (!experiment || experiment.runtime_disabled === true) return false;
@@ -77,6 +125,52 @@ function chooseVariation(hashValue, weights) {
     if (n < acc) return i;
   }
   return weights.length - 1;
+}
+
+// ../shared-runtime/src/force-map.ts
+function parseForceString(value) {
+  if (value.trim() === "~") return {};
+  let map = null;
+  for (const pair of value.split(",")) {
+    const [rawExperimentId, rawVariationId] = pair.split(":");
+    const experimentId = rawExperimentId?.trim();
+    const variationId = rawVariationId?.trim();
+    if (experimentId && variationId) (map ??= {})[experimentId] = variationId;
+  }
+  return map;
+}
+function resolveForceMap(map, experiments) {
+  const resolved = {};
+  for (const [experimentHandle, variationHandle] of Object.entries(map ?? {})) {
+    const experiment = experiments?.find(
+      (candidate) => Boolean(candidate?.id) && Array.isArray(candidate.variations) && (candidate.id === experimentHandle || candidate.publicId === experimentHandle)
+    );
+    resolved[experiment ? experiment.id : experimentHandle] = experiment ? experiment.variations.find(
+      (candidate) => candidate.id === variationHandle || candidate.publicId === variationHandle
+    )?.id ?? variationHandle : variationHandle;
+  }
+  return Object.keys(resolved).length > 0 ? resolved : null;
+}
+var QA_URL_PARAMS = [
+  "drip_qa",
+  "drip_force",
+  "drip_experiment_id",
+  "drip_experiment",
+  "drip_variation_id",
+  "drip_variation",
+  "drip_qa_session",
+  "drip_harness",
+  "drip_debug",
+  "drip_devtools",
+  "drip_screenshot",
+  "apex_debug",
+  "apex_force"
+];
+function stripQaParams(search) {
+  const raw = search.replace(/^\?/, "");
+  if (!raw) return "";
+  const kept = raw.split("&").filter((segment) => !QA_URL_PARAMS.includes(segment.split("=")[0]));
+  return kept.length ? "?" + kept.join("&") : "";
 }
 
 // ../edge-engine/src/deps.ts
@@ -337,10 +431,11 @@ function matchEdgePageRule(url, rule) {
   const excludeRules = Array.isArray(rule.excludeRules) ? rule.excludeRules.map((item) => ({ ...item, include: false })) : [];
   return matchUrlRules(url, [...includeRules, ...excludeRules]);
 }
-function matchEdgePageRules(url, rules) {
+function matchEdgePageRules(url, rules, mode) {
   if (!rules.length) return true;
   let hasInclude = false;
   let included = false;
+  let allIncludedMatched = true;
   for (const rule of rules) {
     const matched = matchEdgePageRule(url, rule);
     if (rule.include === false) {
@@ -348,9 +443,10 @@ function matchEdgePageRules(url, rules) {
     } else {
       hasInclude = true;
       if (matched) included = true;
+      else allIncludedMatched = false;
     }
   }
-  return included || !hasInclude;
+  return !hasInclude || (mode === "all" ? allIncludedMatched : included);
 }
 var EDGE_SEGMENT_CONDITION_OPERATORS = /* @__PURE__ */ new Set([
   "equals",
@@ -368,7 +464,7 @@ function matchEdgeSegmentCondition(url, country, condition) {
     const parsed = new URL(url, "https://_");
     if (condition.signal === "url.full") actual = parsed.href;
     else if (condition.signal === "url.path") actual = parsed.pathname;
-    else if (condition.signal === "url.query") actual = parsed.search;
+    else if (condition.signal === "url.query") actual = stripQaParams(parsed.search);
     else if (condition.signal === "geo.country") actual = country ?? "";
     else return false;
   } catch {
@@ -403,14 +499,15 @@ function matchEdgeSegmentRule(url, country, rule) {
     );
   }
   const conditions = Array.isArray(rule.rules?.conditions) ? rule.rules.conditions : [];
-  if (!conditions.length) return true;
+  if (!conditions.length) return false;
   const operator = rule.rules?.operator === "or" ? "or" : "and";
   return operator === "or" ? conditions.some((condition) => matchEdgeSegmentCondition(url, country, condition)) : conditions.every((condition) => matchEdgeSegmentCondition(url, country, condition));
 }
-function matchEdgeSegmentRules(url, country, rules) {
+function matchEdgeSegmentRules(url, country, rules, mode) {
   if (!rules.length) return true;
   let hasInclude = false;
   let included = false;
+  let allIncludedMatched = true;
   for (const rule of rules) {
     const matched = matchEdgeSegmentRule(url, country, rule);
     if (rule.include === false) {
@@ -418,9 +515,10 @@ function matchEdgeSegmentRules(url, country, rules) {
     } else {
       hasInclude = true;
       if (matched) included = true;
+      else allIncludedMatched = false;
     }
   }
-  return included || !hasInclude;
+  return !hasInclude || (mode === "all" ? allIncludedMatched : included);
 }
 function edgeSegmentRulesAreUrlOnly(rules) {
   return rules.every((rule) => {
@@ -456,7 +554,7 @@ function matchesEdgeAudienceTargeting(targeting, url, country) {
   if (!targeting) return true;
   if (!edgeAudienceTargetingIsWorkerReproducible(targeting)) return false;
   if (Array.isArray(targeting.segmentRules)) {
-    if (!matchEdgeSegmentRules(url, country, targeting.segmentRules)) return false;
+    if (!matchEdgeSegmentRules(url, country, targeting.segmentRules, targeting.segmentMatchMode)) return false;
   }
   return true;
 }
@@ -466,19 +564,13 @@ function matchesEdgeUrlTargeting(targeting, url) {
   if (Array.isArray(targeting.url) && !matchUrlRules(url, targeting.url)) {
     return false;
   }
-  if (Array.isArray(targeting.pageRules) && !matchEdgePageRules(url, targeting.pageRules)) {
+  if (Array.isArray(targeting.pageRules) && !matchEdgePageRules(url, targeting.pageRules, targeting.pageMatchMode)) {
     return false;
   }
   return true;
 }
 function parseForceMapValue(raw) {
-  if (!raw) return {};
-  const map = {};
-  for (const pair of raw.split(",")) {
-    const [expId, varId] = pair.split(":");
-    if (expId && varId) map[expId] = varId;
-  }
-  return map;
+  return raw ? parseForceString(raw) ?? {} : {};
 }
 function parseForceMapFromUrl(url) {
   try {
@@ -616,7 +708,10 @@ function resolveEdgeExclusionGroups(assignments, groups, visitorId, forcedExperi
   );
 }
 function evaluateEdgeAssignments(experiments, url, visitorId, exclusionGroups, stickyExclusionSelections, parsedForceMap, holdoutConfig, qaMode = false, country, now = /* @__PURE__ */ new Date()) {
-  const forceMap = parsedForceMap ?? parseForceMapFromUrl(url);
+  const forceMap = resolveForceMap(
+    parsedForceMap ?? parseForceMapFromUrl(url),
+    experiments
+  ) ?? {};
   if (!qaMode && isGlobalHoldoutVisitor(holdoutConfig, visitorId)) return [];
   const assignments = [];
   for (const experiment of experiments) {
@@ -692,7 +787,8 @@ function evaluateEdgeAssignments(experiments, url, visitorId, exclusionGroups, s
   );
 }
 function hasValidEdgeForce(experiments, forceMap) {
-  return Object.entries(forceMap).some(
+  const resolvedForceMap = resolveForceMap(forceMap, experiments) ?? {};
+  return Object.entries(resolvedForceMap).some(
     ([experimentId, variationId]) => experiments.some(
       (experiment) => experiment.id === experimentId && experiment.variations.some((variation) => variation.id === variationId)
     )
@@ -795,7 +891,7 @@ function sanitizeOpeningTag(tag) {
 }
 function sanitizeHtmlFragment(html) {
   const withoutSentinel = html.split(HTML_SANITIZER_SENTINEL).join("");
-  const withoutScripts = withoutSentinel.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
+  const withoutScripts = withoutSentinel.replace(/<script\b[^>]*>[\s\S]*?<\/script\b[^>]*>/gi, "").replace(/<\/?script\b[^>]*>/gi, "");
   return withoutScripts.replace(HTML_SANITIZER_OPENING_TAG, (tag) => sanitizeOpeningTag(tag));
 }
 function isSafeCssValue(value) {
@@ -814,14 +910,88 @@ function isSafeMutationAttribute(name, value) {
   }
   return true;
 }
-function applyMutationToRewriter(rewriter, mutation) {
+function getEdgeMutationKey(mutation, index) {
+  return `${mutation.action}:${index}:${mutation.selector}:${mutation.html || mutation.text || ""}`;
+}
+function stampedInsertHtml(mutation, stamp) {
+  if (typeof mutation.html !== "string" || /data-drip-inserted/i.test(mutation.html)) return null;
+  const html = sanitizeHtmlFragment(mutation.html).trim();
+  const tokens = html.match(/<(?:(?:"[^"]*"|'[^']*')|[^'">])*>|[^<]+/g) ?? [];
+  const stack = [];
+  let roots = 0;
+  for (const token of tokens) {
+    if (token.startsWith("<!--")) return null;
+    if (!token.startsWith("<")) {
+      if (!stack.length && token.trim()) return null;
+      continue;
+    }
+    const match = token.match(/^<(\/)?([a-z][\w-]*)\b/i);
+    if (!match) return null;
+    const tag = match[2].toLowerCase();
+    if (tag === "script") return null;
+    if (match[1]) {
+      if (stack.pop() !== tag) return null;
+    } else {
+      if (!stack.length) roots++;
+      if (!/^(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)$/.test(tag)) {
+        if (/\/\s*>$/.test(token)) return null;
+        stack.push(tag);
+      }
+    }
+  }
+  if (roots !== 1 || stack.length) return null;
+  const escape = (value) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return html.replace(/^(<[a-z][\w-]*)/i, '$1 data-drip-inserted="' + escape(getEdgeMutationKey(mutation, stamp.index)) + '" data-drip-edge-applied="' + escape(`${stamp.experimentId}:${stamp.index}`) + '"');
+}
+function edgePreAppliedMutation(mutation, stamp) {
+  if (!mutation || typeof mutation !== "object") return null;
+  if (!mutation.selector || !mutation.action) return null;
+  const base = { e: stamp.experimentId, i: stamp.index, s: mutation.selector, a: mutation.action };
+  switch (mutation.action) {
+    case "text":
+    case "setText":
+      return typeof mutation.text === "string" ? { ...base, t: mutation.text } : null;
+    case "html":
+      return typeof mutation.html === "string" ? { ...base, h: sanitizeHtmlFragment(mutation.html) } : null;
+    case "remove":
+      return base;
+    case "insertBefore":
+    case "insertAfter": {
+      const h = stampedInsertHtml(mutation, stamp);
+      return h ? { ...base, h, k: getEdgeMutationKey(mutation, stamp.index) } : null;
+    }
+    case "attribute": {
+      const candidates = {};
+      if (mutation.attribute?.name && (typeof mutation.attribute.value === "string" || mutation.attribute.value == null)) candidates[mutation.attribute.name] = mutation.attribute.value ?? null;
+      Object.assign(candidates, mutation.attributes);
+      const at = Object.fromEntries(Object.entries(candidates).filter(([k, v]) => isSafeMutationAttribute(k, v)));
+      return Object.keys(at).length ? { ...base, at } : null;
+    }
+    case "style":
+    case "setStyle": {
+      const st = Object.fromEntries(Object.entries(mutation.styles ?? {}).filter(([, v]) => isSafeCssValue(v)).map(([k, v]) => [k.startsWith("--") ? k : k.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase()).replace(/^ms-/, "-ms-"), v]));
+      return Object.keys(st).length ? { ...base, st } : null;
+    }
+    default:
+      return null;
+  }
+}
+function applyMutationToRewriter(rewriter, mutation, stamp) {
   const selector = typeof mutation.selector === "string" ? mutation.selector : "";
   if (!selector) return;
+  const mark = (element) => {
+    if (!stamp) return;
+    const keys = (element.getAttribute("data-drip-edge-applied") || "").split(/\s+/).filter(Boolean);
+    const key = `${stamp.experimentId}:${stamp.index}`;
+    if (!keys.includes(key)) keys.push(key);
+    element.setAttribute("data-drip-edge-applied", keys.join(" "));
+  };
   switch (mutation.action) {
     case "html":
       rewriter.on(selector, {
         element(element) {
           if (typeof mutation.html === "string") {
+            mark(element);
             element.setInnerContent(sanitizeHtmlFragment(mutation.html), { html: true });
           }
         }
@@ -832,40 +1002,36 @@ function applyMutationToRewriter(rewriter, mutation) {
       rewriter.on(selector, {
         element(element) {
           if (typeof mutation.text === "string") {
+            mark(element);
             element.setInnerContent(mutation.text, { html: false });
           }
         }
       });
       return;
-    case "attribute":
+    case "attribute": {
+      const applied = edgePreAppliedMutation(mutation, stamp ?? { experimentId: "", index: 0 });
+      if (!applied?.at) return;
       rewriter.on(selector, {
         element(element) {
-          if (mutation.attribute && typeof mutation.attribute.name === "string") {
-            if (!isSafeMutationAttribute(mutation.attribute.name, mutation.attribute.value ?? null)) return;
-            if (mutation.attribute.value === null) {
-              element.removeAttribute(mutation.attribute.name);
-            } else if (typeof mutation.attribute.value === "string") {
-              element.setAttribute(mutation.attribute.name, mutation.attribute.value);
-            }
+          for (const [name, value] of Object.entries(applied.at)) {
+            if (value === null) element.removeAttribute(name);
+            else element.setAttribute(name, value);
           }
-          if (mutation.attributes && typeof mutation.attributes === "object") {
-            for (const [name, value] of Object.entries(mutation.attributes)) {
-              if (!name) continue;
-              if (!isSafeMutationAttribute(name, value)) continue;
-              if (value === null) element.removeAttribute(name);
-              else element.setAttribute(name, value);
-            }
-          }
+          mark(element);
         }
       });
       return;
+    }
     case "style":
     case "setStyle":
       rewriter.on(selector, {
         element(element) {
           if (!mutation.styles || typeof mutation.styles !== "object") return;
           const next = mergeInlineStyle(element.getAttribute("style"), mutation.styles);
-          if (next) element.setAttribute("style", next);
+          if (next) {
+            mark(element);
+            element.setAttribute("style", next);
+          }
         }
       });
       return;
@@ -877,8 +1043,17 @@ function applyMutationToRewriter(rewriter, mutation) {
       });
       return;
     case "insertBefore":
-    case "insertAfter":
+    case "insertAfter": {
+      if (!stamp) return;
+      const html = stampedInsertHtml(mutation, stamp);
+      if (!html) return;
+      rewriter.on(selector, { element(element) {
+        mark(element);
+        if (mutation.action === "insertBefore") element.before(html, { html: true });
+        else element.after(html, { html: true });
+      } });
       return;
+    }
     default:
       return;
   }
@@ -903,6 +1078,9 @@ function mergeCookieHeaders(existing, override) {
 }
 function sanitizeUpstreamRequestHeaders(request, upstreamUrl, upstreamCookie) {
   const headers = new Headers(request.headers);
+  headers.delete("x-drip-visitor-id");
+  headers.delete("x-drip-assignments");
+  headers.delete("x-drip-assignments-signature");
   headers.delete("x-drip-shop");
   headers.delete("x-drip-origin");
   headers.delete("x-drip-public-url");
@@ -1005,11 +1183,23 @@ function appendEdgeRuntimeScript(rewriter, runtimeScript, cspNonce) {
   const state = { inserted: false };
   rewriter.on("head", {
     element(element) {
-      if (state.inserted) return;
-      element.append(tag, { html: true });
-      state.inserted = true;
+      element.onEndTag((end) => {
+        if (!state.inserted) {
+          end.before(tag, { html: true });
+          state.inserted = true;
+        }
+      });
     }
   });
+  for (const selector of ["head > script", "head > link", "head > style"]) {
+    rewriter.on(selector, {
+      element(element) {
+        if (state.inserted) return;
+        element.before(tag, { html: true });
+        state.inserted = true;
+      }
+    });
+  }
   rewriter.on("body", {
     element(element) {
       if (state.inserted) return;
@@ -1032,7 +1222,7 @@ function resolveEdgeBaselineRequestUrl(input) {
   }
   return { baselineRequested, url };
 }
-function buildEdgeRuntimeScript(assignments, eventsEndpoint, ingestShopId, ingestSignature, observability, strictConsentMode = false, cohort, initialVisitorId, qaMode = false, holdoutConfigEpoch) {
+function buildEdgeRuntimeScript(assignments, eventsEndpoint, ingestShopId, ingestSignature, observability, strictConsentMode = false, cohort, initialVisitorId, qaMode = false, holdoutConfigEpoch, preApplied) {
   const payload = assignments.map((assignment) => ({
     experimentId: assignment.experimentId,
     variationId: assignment.variationId,
@@ -1062,7 +1252,11 @@ function buildEdgeRuntimeScript(assignments, eventsEndpoint, ingestShopId, inges
     variationId: assignment.variationId,
     index: assignment.index
   }));
-  return "(function(){if(window.__dripEdgeInit)return;window.__dripEdgeInit=true;window.__dripEdgeAssignments=" + JSON.stringify(edgeAssignmentPayload) + ";var A=" + JSON.stringify(payload) + ";var CO=" + JSON.stringify(cohort ?? "") + ";var HCE=" + JSON.stringify(holdoutConfigEpoch) + ";var E=" + JSON.stringify(eventsEndpoint) + ";var SH=" + JSON.stringify(ingestShopId) + ";var SG=" + JSON.stringify(ingestSignature) + ";var CM=" + JSON.stringify(strictConsentMode) + ";var QM=" + JSON.stringify(qaMode) + ";var _OBS={edge_source:" + JSON.stringify(edgeSource) + ",assignment_ready_ms:" + assignmentReadyMs + "};function sid(){try{var k='drip_sid';var v=sessionStorage.getItem(k);if(v)return v;v=Math.random().toString(36).slice(2)+Date.now().toString(36);sessionStorage.setItem(k,v);return v;}catch(e){return Math.random().toString(36).slice(2)+Date.now().toString(36);}}function uid(){try{var m=document.cookie.match(/(?:^|;\\s*)drip_uid=([^;]+)/);if(m&&m[1])return decodeURIComponent(m[1]);}catch(e){}return Math.random().toString(36).slice(2)+Date.now().toString(36);}function eid(){try{if(window.crypto&&typeof window.crypto.randomUUID==='function')return window.crypto.randomUUID();if(window.crypto&&window.crypto.getRandomValues){var b=new Uint8Array(16);window.crypto.getRandomValues(b);var h='';for(var i=0;i<b.length;i++)h+=b[i].toString(16).padStart(2,'0');return h;}}catch(e){}return Date.now().toString(36)+Math.random().toString(36).slice(2);}function hasConsent(){if(window.__dripHasConsent===true)return true;if(window.__dripHasConsent===false)return false;try{if(/(?:^|;\\s*)drip_consent=1(?:;|$)/.test(document.cookie||''))return true;}catch(e){}if(window.__dripRequireConsent===true)return false;if(!CM)return true;return false;}var SID='';var UID=" + JSON.stringify(initialVisitorId ?? "") + ";var Q=[];var started=false;var clickBound=false;var timer=0;var shopifySynced=false;var shopifySyncDeadline=0;var shopifySyncAttempt=0;var shopifySyncTimer=0;function ensureIds(){if(!hasConsent())return false;if(!SID)SID=sid();if(!UID)UID=uid();return true;}function persistUid(){if(!UID||!hasConsent())return;try{document.cookie='drip_uid='+encodeURIComponent(UID)+'; Max-Age=31536000; Path=/; SameSite=Lax';}catch(e){}}function syncShopify(){if(shopifySynced||!hasConsent())return;if(!shopifySyncDeadline)shopifySyncDeadline=Date.now()+10000;try{var publish=window.Shopify&&window.Shopify.analytics&&window.Shopify.analytics.publish;if(typeof publish==='function'){publish('drip_assignment_sync',{visitorId:UID,sessionId:SID,qaMode:QM,qaSessionId:'',cohort:CO||undefined,holdoutConfigEpoch:HCE,assignments:A.filter(function(a){return a.attributableOnly!==true;}).map(function(a){return{experimentId:a.experimentId,variationId:a.variationId,assignmentEpoch:a.assignmentEpoch};})});shopifySynced=true;return;}}catch(e){}var remaining=shopifySyncDeadline-Date.now();if(remaining<=0)return;var delay=Math.min(1000,100*Math.pow(2,shopifySyncAttempt++),remaining);shopifySyncTimer=window.setTimeout(syncShopify,delay);}function sys(s,d){var o={};for(var k in s)o[k]=s[k];if(d){for(var k2 in d)o[k2]=d[k2];}for(var k3 in s)o[k3]=s[k3];return o;}function push(t,d,experimentId,vid,eventId){if(!ensureIds())return;d=sys(CO?{cohort:CO,holdout_config_epoch:HCE}:{},d);Q.push({type:t,data:d,experimentId:experimentId,variationId:vid,event_id:eventId,qa_mode:QM,shopId:SH,visitorId:UID,sessionId:SID,url:location.href,ts:Date.now()});if(Q.length>=20)flush();}function flush(){if(!ensureIds()||!Q.length)return;var batch=Q.splice(0,Q.length);fetch(E,{method:'POST',headers:{'Content-Type':'application/json','X-Drip-Shop':SH,'X-Drip-Signature':SG},body:JSON.stringify({events:batch}),keepalive:true}).catch(function(){});}function gk(gid,vid){return 'drip_goal:'+gid+':'+vid;}function fired(gid,vid){try{return localStorage.getItem(gk(gid,vid))==='1';}catch(e){return false;}}function mark(gid,vid){try{localStorage.setItem(gk(gid,vid),'1');}catch(e){}}function cap(el,arr){var out={};if(!arr||!arr.length)return out;for(var i=0;i<arr.length;i++){var r=arr[i];if(!r||!r.property)continue;if(r.source==='attribute'&&r.attribute){out[r.property]=el.getAttribute(r.attribute);}else if(r.source==='textContent'){out[r.property]=(el.textContent||'').trim().slice(0,500);}else if(r.source==='dataset'&&r.attribute){var key=r.attribute.replace(/^data-/,'').replace(/-([a-z])/g,function(_,c){return c.toUpperCase();});out[r.property]=(el.dataset&&el.dataset[key])||null;}}return out;}function goalActive(g,a){if(g.pageId)return Array.isArray(a.activePageIds)&&a.activePageIds.indexOf(g.pageId)>=0;if(!g.urlPattern)return true;try{return new RegExp(g.urlPattern).test(location.href);}catch(e){return false;}}function fire(goal,a,data){if(!ensureIds()||!goal||!goal.id||!goalActive(goal,a))return;if(goal.countOnce){if(fired(goal.id,a.variationId))return;mark(goal.id,a.variationId);}var payload=sys({goalId:goal.id},data);push('goal',payload,a.experimentId,a.variationId);}function runPageviewGoals(){for(var i=0;i<A.length;i++){var a=A[i];for(var j=0;j<a.goals.length;j++){var g=a.goals[j];if(g.type==='pageview')fire(g,a);}}}function txtM(el,txt){return(el.textContent||'').trim().toLowerCase().indexOf(txt.trim().toLowerCase())>=0;}function findTxt(el,txt){var n=txt.trim().toLowerCase();while(el&&el!==document.documentElement){if((el.textContent||'').trim().toLowerCase().indexOf(n)>=0)return el;el=el.parentElement;}return null;}function bindClickGoals(){if(clickBound)return;clickBound=true;document.addEventListener('click',function(ev){var t=ev.target;if(!t||!t.closest)return;for(var i=0;i<A.length;i++){var a=A[i];for(var j=0;j<a.goals.length;j++){var g=a.goals[j];if(g.type!=='click')continue;var s=g.selector,tm=g.textMatch;if(!s&&!tm)continue;var m=null;if(s){m=t.closest(s);if(!m)continue;if(tm&&!txtM(m,tm))continue;}else if(tm){m=findTxt(t,tm);if(!m)continue;}if(m)fire(g,a,cap(m,g.capture));}}},true);}function start(){if(started||!ensureIds())return;started=true;syncShopify();if(CO)push('pageview',{});for(var i=0;i<A.length;i++){var a=A[i];if(!a.attributableOnly)push('experiment_viewed',{index:a.index},a.experimentId,a.variationId);}runPageviewGoals();bindClickGoals();timer=window.setInterval(flush,5000);window.setTimeout(flush,120);try{var bsMs=0;if(window.performance&&performance.timing){bsMs=Math.max(0,performance.timing.domContentLoadedEventStart-performance.timing.navigationStart);}var cacheSrc=document.querySelector('[data-drip-cache]')?document.querySelector('[data-drip-cache]').getAttribute('data-drip-cache'):'none';var perfPayload={perf_event_kind:'init',blank_screen_ms:bsMs,assignment_ready_ms:_OBS.assignment_ready_ms,platform:'auto',config_source:_OBS.edge_source,activation_mode:'observer',cache_hit_source:cacheSrc};push('sdk_perf',perfPayload);push('edge_perf',{blank_screen_ms:bsMs,assignment_ready_ms:_OBS.assignment_ready_ms,edge_source:_OBS.edge_source,cache_hit_source:cacheSrc});}catch(e){}}window.addEventListener('pagehide',flush);window.addEventListener('beforeunload',flush);var req=(CM||window.__dripRequireConsent===true||typeof window.__dripHasConsent==='boolean');var consent=hasConsent();function consentCookie(granted){try{document.cookie=granted?'drip_consent=1; Max-Age=31536000; Path=/; SameSite=Lax':'drip_consent=; Max-Age=0; Path=/; SameSite=Lax';}catch(e){}}var prevSet=window.dripSetConsent;window.dripSetConsent=function(granted){window.__dripHasConsent=(granted===true);consentCookie(window.__dripHasConsent);if(typeof prevSet==='function'){try{prevSet(granted);}catch(e){}}if(window.__dripHasConsent){ensureIds();persistUid();start();}else{started=false;Q=[];if(timer){clearInterval(timer);timer=0;}if(shopifySyncTimer){clearTimeout(shopifySyncTimer);shopifySyncTimer=0;}shopifySyncDeadline=0;shopifySyncAttempt=0;}};window.Drip=window.Drip||{};if(typeof window.Drip.flush!=='function'){window.Drip.flush=flush;}if(typeof window.Drip.setConsent!=='function'){window.Drip.setConsent=function(granted){window.dripSetConsent(granted);};}if(typeof window.Drip.trackGoal!=='function'){window.Drip.trackGoal=function(goalId,data){for(var i=0;i<A.length;i++){var a=A[i];for(var j=0;j<a.goals.length;j++){var g=a.goals[j];if(g.id===goalId)fire(g,a,data||{});}}};}if(typeof window.Drip.trackRevenue!=='function'){window.Drip.trackRevenue=function(revenue,data){var p=sys({goalId:'__revenue__',revenue:revenue},data);if(data&&'currency' in data){var currency=typeof data.currency==='string'?data.currency.trim().toUpperCase():'';if((' " + ISO_4217_CURRENCY_CODES.join(" ") + " ').indexOf(' '+currency+' ')!==-1){p.currency=currency;}else{delete p.currency;p.currency_raw=data.currency;p.money_error='invalid_currency';}}var eventId=eid();var revenueAssignments=A.filter(function(a){return a.attributableOnly!==true;});if(CO&&!revenueAssignments.length){push('goal',p,undefined,undefined,eventId);return;}for(var i=0;i<revenueAssignments.length;i++){var a=revenueAssignments[i];push('goal',p,a.experimentId,a.variationId,eventId);}};}if(!req||consent)start();})();";
+  return "(function(){if(window.__dripEdgeInit)return;window.__dripEdgeInit=true;" + buildEdgeGuard(preApplied ?? filterMutationAssignments(assignments).flatMap((a) => a.mutations.flatMap((m, i) => {
+    if (!m || typeof m !== "object") return [];
+    const p = edgePreAppliedMutation(m, { experimentId: a.experimentId, index: i });
+    return p ? [p] : [];
+  }))) + "window.__dripEdgeAssignments=" + JSON.stringify(edgeAssignmentPayload) + ";var A=" + JSON.stringify(payload) + ";var CO=" + JSON.stringify(cohort ?? "") + ";var HCE=" + JSON.stringify(holdoutConfigEpoch) + ";var E=" + JSON.stringify(eventsEndpoint) + ";var SH=" + JSON.stringify(ingestShopId) + ";var SG=" + JSON.stringify(ingestSignature) + ";var CM=" + JSON.stringify(strictConsentMode) + ";var QM=" + JSON.stringify(qaMode) + ";var _OBS={edge_source:" + JSON.stringify(edgeSource) + ",assignment_ready_ms:" + assignmentReadyMs + "};function sid(){try{var k='drip_sid';var v=sessionStorage.getItem(k);if(v)return v;v=Math.random().toString(36).slice(2)+Date.now().toString(36);sessionStorage.setItem(k,v);return v;}catch(e){return Math.random().toString(36).slice(2)+Date.now().toString(36);}}function uid(){try{var m=document.cookie.match(/(?:^|;\\s*)drip_uid=([^;]+)/);if(m&&m[1])return decodeURIComponent(m[1]);}catch(e){}return Math.random().toString(36).slice(2)+Date.now().toString(36);}function eid(){try{if(window.crypto&&typeof window.crypto.randomUUID==='function')return window.crypto.randomUUID();if(window.crypto&&window.crypto.getRandomValues){var b=new Uint8Array(16);window.crypto.getRandomValues(b);var h='';for(var i=0;i<b.length;i++)h+=b[i].toString(16).padStart(2,'0');return h;}}catch(e){}return Date.now().toString(36)+Math.random().toString(36).slice(2);}function hasConsent(){if(window.__dripHasConsent===true)return true;if(window.__dripHasConsent===false)return false;try{if(/(?:^|;\\s*)drip_consent=1(?:;|$)/.test(document.cookie||''))return true;}catch(e){}if(window.__dripRequireConsent===true)return false;if(!CM)return true;return false;}var SID='';var UID=" + JSON.stringify(initialVisitorId ?? "") + ";var Q=[];var started=false;var clickBound=false;var timer=0;var shopifySynced=false;var shopifySyncDeadline=0;var shopifySyncAttempt=0;var shopifySyncTimer=0;function ensureIds(){if(!hasConsent())return false;if(!SID)SID=sid();if(!UID)UID=uid();return true;}function persistUid(){if(!UID||!hasConsent())return;try{document.cookie='drip_uid='+encodeURIComponent(UID)+'; Max-Age=31536000; Path=/; SameSite=Lax';}catch(e){}}function syncShopify(){if(shopifySynced||!hasConsent())return;if(!shopifySyncDeadline)shopifySyncDeadline=Date.now()+10000;try{var publish=window.Shopify&&window.Shopify.analytics&&window.Shopify.analytics.publish;if(typeof publish==='function'){publish('drip_assignment_sync',{visitorId:UID,sessionId:SID,qaMode:QM,qaSessionId:'',cohort:CO||undefined,holdoutConfigEpoch:HCE,assignments:A.filter(function(a){return a.attributableOnly!==true;}).map(function(a){return{experimentId:a.experimentId,variationId:a.variationId,assignmentEpoch:a.assignmentEpoch};})});shopifySynced=true;return;}}catch(e){}var remaining=shopifySyncDeadline-Date.now();if(remaining<=0)return;var delay=Math.min(1000,100*Math.pow(2,shopifySyncAttempt++),remaining);shopifySyncTimer=window.setTimeout(syncShopify,delay);}function sys(s,d){var o={};for(var k in s)o[k]=s[k];if(d){for(var k2 in d)o[k2]=d[k2];}for(var k3 in s)o[k3]=s[k3];return o;}function push(t,d,experimentId,vid,eventId){if(!ensureIds())return;d=sys(CO?{cohort:CO,holdout_config_epoch:HCE}:{},d);Q.push({type:t,data:d,experimentId:experimentId,variationId:vid,event_id:eventId,qa_mode:QM,shopId:SH,visitorId:UID,sessionId:SID,url:location.href,ts:Date.now()});if(Q.length>=20)flush();}function flush(){if(!ensureIds()||!Q.length)return;var batch=Q.splice(0,Q.length);fetch(E,{method:'POST',headers:{'Content-Type':'application/json','X-Drip-Shop':SH,'X-Drip-Signature':SG},body:JSON.stringify({events:batch}),keepalive:true}).catch(function(){});}function gk(gid,vid){return 'drip_goal:'+gid+':'+vid;}function fired(gid,vid){try{return localStorage.getItem(gk(gid,vid))==='1';}catch(e){return false;}}function mark(gid,vid){try{localStorage.setItem(gk(gid,vid),'1');}catch(e){}}function cap(el,arr){var out={};if(!arr||!arr.length)return out;for(var i=0;i<arr.length;i++){var r=arr[i];if(!r||!r.property)continue;if(r.source==='attribute'&&r.attribute){out[r.property]=el.getAttribute(r.attribute);}else if(r.source==='textContent'){out[r.property]=(el.textContent||'').trim().slice(0,500);}else if(r.source==='dataset'&&r.attribute){var key=r.attribute.replace(/^data-/,'').replace(/-([a-z])/g,function(_,c){return c.toUpperCase();});out[r.property]=(el.dataset&&el.dataset[key])||null;}}return out;}function goalActive(g,a){if(g.pageId)return Array.isArray(a.activePageIds)&&a.activePageIds.indexOf(g.pageId)>=0;if(!g.urlPattern)return true;try{return new RegExp(g.urlPattern).test(location.href);}catch(e){return false;}}function fire(goal,a,data){if(!ensureIds()||!goal||!goal.id||!goalActive(goal,a))return;if(goal.countOnce){if(fired(goal.id,a.variationId))return;mark(goal.id,a.variationId);}var payload=sys({goalId:goal.id},data);push('goal',payload,a.experimentId,a.variationId);}function runPageviewGoals(){for(var i=0;i<A.length;i++){var a=A[i];for(var j=0;j<a.goals.length;j++){var g=a.goals[j];if(g.type==='pageview')fire(g,a);}}}function txtM(el,txt){return(el.textContent||'').trim().toLowerCase().indexOf(txt.trim().toLowerCase())>=0;}function findTxt(el,txt){var n=txt.trim().toLowerCase();while(el&&el!==document.documentElement){if((el.textContent||'').trim().toLowerCase().indexOf(n)>=0)return el;el=el.parentElement;}return null;}function bindClickGoals(){if(clickBound)return;clickBound=true;document.addEventListener('click',function(ev){var t=ev.target;if(!t||!t.closest)return;for(var i=0;i<A.length;i++){var a=A[i];for(var j=0;j<a.goals.length;j++){var g=a.goals[j];if(g.type!=='click')continue;var s=g.selector,tm=g.textMatch;if(!s&&!tm)continue;var m=null;if(s){m=t.closest(s);if(!m)continue;if(tm&&!txtM(m,tm))continue;}else if(tm){m=findTxt(t,tm);if(!m)continue;}if(m)fire(g,a,cap(m,g.capture));}}},true);}var edgePerfEmitted=false,edgePerfPending=null;function emitEdgePerf(){if(edgePerfEmitted)return;edgePerfEmitted=true;var bsMs=0;if(window.performance&&performance.timing)bsMs=Math.max(0,performance.timing.domContentLoadedEventStart-performance.timing.navigationStart);var cacheEl=document.querySelector('[data-drip-cache]');edgePerfPending={edge_reassert_count:edgeDiagnostics.reasserts_count,edge_revert_loops_detected:edgeDiagnostics.revert_loops_detected,edge_first_revert_ms:edgeDiagnostics.first_revert_ms,blank_screen_ms:bsMs,assignment_ready_ms:_OBS.assignment_ready_ms,edge_source:_OBS.edge_source,cache_hit_source:cacheEl?cacheEl.getAttribute('data-drip-cache'):'none'};drainEdgePerf();}function drainEdgePerf(){if(edgePerfPending&&ensureIds()){var payload=edgePerfPending;edgePerfPending=null;push('edge_perf',payload);}}function start(){if(started||!ensureIds())return;started=true;drainEdgePerf();syncShopify();if(CO)push('pageview',{});for(var i=0;i<A.length;i++){var a=A[i];if(!a.attributableOnly)push('experiment_viewed',{index:a.index},a.experimentId,a.variationId);}runPageviewGoals();bindClickGoals();timer=window.setInterval(flush,5000);window.setTimeout(flush,120);try{var bsMs=0;if(window.performance&&performance.timing){bsMs=Math.max(0,performance.timing.domContentLoadedEventStart-performance.timing.navigationStart);}var cacheSrc=document.querySelector('[data-drip-cache]')?document.querySelector('[data-drip-cache]').getAttribute('data-drip-cache'):'none';var perfPayload={perf_event_kind:'init',blank_screen_ms:bsMs,assignment_ready_ms:_OBS.assignment_ready_ms,platform:'auto',config_source:_OBS.edge_source,activation_mode:'observer',cache_hit_source:cacheSrc};push('sdk_perf',perfPayload);if(!edgeGuardInstalled)emitEdgePerf();}catch(e){}}window.addEventListener('pagehide',function(){emitEdgePerf();flush();});window.addEventListener('beforeunload',flush);var req=(CM||window.__dripRequireConsent===true||typeof window.__dripHasConsent==='boolean');var consent=hasConsent();function consentCookie(granted){try{document.cookie=granted?'drip_consent=1; Max-Age=31536000; Path=/; SameSite=Lax':'drip_consent=; Max-Age=0; Path=/; SameSite=Lax';}catch(e){}}var prevSet=window.dripSetConsent;window.dripSetConsent=function(granted){window.__dripHasConsent=(granted===true);consentCookie(window.__dripHasConsent);if(typeof prevSet==='function'){try{prevSet(granted);}catch(e){}}if(window.__dripHasConsent){ensureIds();persistUid();start();}else{started=false;Q=[];if(timer){clearInterval(timer);timer=0;}if(shopifySyncTimer){clearTimeout(shopifySyncTimer);shopifySyncTimer=0;}shopifySyncDeadline=0;shopifySyncAttempt=0;}};window.Drip=window.Drip||{};if(typeof window.Drip.flush!=='function'){window.Drip.flush=flush;}if(typeof window.Drip.setConsent!=='function'){window.Drip.setConsent=function(granted){window.dripSetConsent(granted);};}if(typeof window.Drip.trackGoal!=='function'){window.Drip.trackGoal=function(goalId,data){for(var i=0;i<A.length;i++){var a=A[i];for(var j=0;j<a.goals.length;j++){var g=a.goals[j];if(g.id===goalId)fire(g,a,data||{});}}};}if(typeof window.Drip.trackRevenue!=='function'){window.Drip.trackRevenue=function(revenue,data){var p=sys({goalId:'__revenue__',revenue:revenue},data);if(data&&'currency' in data){var currency=typeof data.currency==='string'?data.currency.trim().toUpperCase():'';if((' " + ISO_4217_CURRENCY_CODES.join(" ") + " ').indexOf(' '+currency+' ')!==-1){p.currency=currency;}else{delete p.currency;p.currency_raw=data.currency;p.money_error='invalid_currency';}}var eventId=eid();var revenueAssignments=A.filter(function(a){return a.attributableOnly!==true;});if(!revenueAssignments.length){push('goal',p,undefined,undefined,eventId);return;}for(var i=0;i<revenueAssignments.length;i++){var a=revenueAssignments[i];push('goal',p,a.experimentId,a.variationId,eventId);}};}if(!req||consent)start();})();";
 }
 function resolveEdgeVisitorContext(initialVisitorId, shouldSetVisitorCookie, config, edgeConsentGranted, createVisitorId = () => randomHexId(16), qaMode = false) {
   const strictConsentPending = config.runtime?.consentMode?.enabled === true && !edgeConsentGranted;
@@ -1205,6 +1399,10 @@ async function fetchShopConfig(input) {
   const cacheKey = buildConfigCacheKey(input.shopId, configuredUrl);
   const kvKey = cacheKey.url;
   const configUrl = buildConfigUrl(input.shopId, configuredUrl);
+  if (input.qaForce) {
+    configUrl.searchParams.set("drip_qa", "1");
+    configUrl.searchParams.set("drip_force", input.qaForce);
+  }
   const runWaitUntil = (promise) => {
     if (input.waitUntil) input.waitUntil(promise);
     else void promise.catch(() => void 0);
@@ -1227,6 +1425,18 @@ async function fetchShopConfig(input) {
       clearTimeout(timer);
     }
   };
+  if (input.qaForce) {
+    try {
+      const { config } = await fetchFromNetwork();
+      return { config, source: "qa-network" };
+    } catch (error) {
+      return {
+        config: null,
+        source: error instanceof ConfigResponseTooLargeError ? "oversized" : "none",
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
   const storeConfig = (raw, config, guardKvRevision = false) => {
     return (async () => {
       const entry = { raw, storedAt: now(), revision: extractRevision(config) };
@@ -1327,7 +1537,7 @@ function classifyRequest(request) {
 }
 
 // src/version.ts
-var EDGE_WORKER_VERSION = "1.1.5";
+var EDGE_WORKER_VERSION = "1.2.0";
 var MINIMUM_COMPATIBLE_ENGINE_VERSION_FIELD = "minimumEdgeEngineVersion";
 function parseVersion(value) {
   const match = value.trim().match(
@@ -1420,7 +1630,7 @@ function removeStaleBuckets(buckets, now, staleAfterMs) {
 }
 
 // src/rate-limiter-do.ts
-var RATE_LIMIT_LANES = /* @__PURE__ */ new Set(["events", "replay", "status"]);
+var RATE_LIMIT_LANES = /* @__PURE__ */ new Set(["events", "replay", "status", "qa-config"]);
 function parseRateLimitRequest(raw) {
   if (typeof raw !== "object" || raw === null) return null;
   const input = raw;
@@ -1475,13 +1685,19 @@ var EDGE_HTML_CACHE_TTL_SECONDS = 15;
 var DEFAULT_PROXY_RATE_LIMIT_WINDOW_MS = 6e4;
 var DEFAULT_PROXY_RATE_LIMIT_MAX_PER_IP = 300;
 var DEFAULT_PROXY_RATE_LIMIT_MAX_PER_SHOP = 1e4;
-var DEFAULT_ORIGIN_FETCH_TIMEOUT_MS = 5e3;
-var DEFAULT_MAX_MUTATION_BYTES = 256 * 1024;
-var DEFAULT_MAX_CONFIG_BYTES = 2 * 1024 * 1024;
+var DEFAULT_QA_CONFIG_FETCH_MAX_PER_IP = 30;
+var DEFAULT_QA_CONFIG_FETCH_MAX_PER_SHOP = 300;
 var proxyRateLimitBuckets = /* @__PURE__ */ new Map();
 var proxyRateLimitRequestCount = 0;
 var lastConfigSources = /* @__PURE__ */ new Map();
 var lastConfigErrors = /* @__PURE__ */ new Map();
+var qaConfigFetchesDropped = 0;
+var PUBLIC_ID_HANDLE = /^[1-9][0-9]{9}$/;
+function qaForceForPublicIdPins(forceMap) {
+  const entries = Object.entries(forceMap);
+  if (!entries.some(([e, v]) => PUBLIC_ID_HANDLE.test(e) || PUBLIC_ID_HANDLE.test(v))) return null;
+  return entries.sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([e, v]) => `${e}:${v}`).join(",");
+}
 function resolveCustomerAssignmentInputs(config, requestUrl, cookieHeader, strictConsentPending) {
   const forceMap = resolveEdgeForceMap(requestUrl, cookieHeader);
   return {
@@ -1509,9 +1725,71 @@ function mergeVaryCookie(headers) {
   if (!vary.some((part) => part.toLowerCase() === "cookie")) vary.push("Cookie");
   headers.set("Vary", vary.join(", "));
 }
-function upstreamRequest(request, env, targetUrl) {
+var originHandoffWarningLogged = false;
+async function originHandoffHeaders(handoff, token) {
+  const assignments = handoff.assignments.map((assignment) => ({
+    experimentId: assignment.experimentId,
+    variationId: assignment.variationId,
+    assignmentEpoch: assignment.assignmentEpoch ?? null,
+    ...assignment.attributableOnly === true ? { attributableOnly: true } : {}
+  }));
+  const payload = {
+    v: 1,
+    configRevision: handoff.configRevision,
+    visitorId: handoff.visitorId,
+    assignments
+  };
+  const encoder = new TextEncoder();
+  let serialized = JSON.stringify(payload);
+  if (encoder.encode(serialized).byteLength >= 4096) {
+    const prefix = [];
+    serialized = JSON.stringify({ ...payload, assignments: prefix, truncated: true });
+    for (const assignment of assignments) {
+      const candidate = JSON.stringify({ ...payload, assignments: [...prefix, assignment], truncated: true });
+      if (encoder.encode(candidate).byteLength >= 4096) break;
+      prefix.push(assignment);
+      serialized = candidate;
+    }
+    if (encoder.encode(serialized).byteLength >= 4096) throw new Error("Origin handoff exceeds header budget");
+  }
+  const headers = new Headers({
+    "x-drip-visitor-id": handoff.visitorId,
+    "x-drip-assignments": serialized
+  });
+  if (token?.trim()) {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(token),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(serialized));
+    headers.set("x-drip-assignments-signature", Array.from(
+      new Uint8Array(signature),
+      (byte) => byte.toString(16).padStart(2, "0")
+    ).join(""));
+  }
+  return headers;
+}
+async function upstreamRequest(request, env, targetUrl, handoff) {
   const upstreamUrl = buildUpstreamUrl(targetUrl, env.ORIGIN_URL);
-  const headers = sanitizeUpstreamRequestHeaders(request, upstreamUrl);
+  const headers = sanitizeUpstreamRequestHeaders(
+    request,
+    upstreamUrl,
+    handoff?.shouldSetVisitorCookie ? `drip_uid=${handoff.visitorId}` : void 0
+  );
+  if (handoff) {
+    try {
+      const forwarded = await originHandoffHeaders(handoff, env.APEX_INGEST_TOKEN);
+      forwarded.forEach((value, name) => headers.set(name, value));
+    } catch {
+      if (!originHandoffWarningLogged) {
+        originHandoffWarningLogged = true;
+        console.warn("[apex-edge] Origin assignment handoff failed; forwarding without assignment headers");
+      }
+    }
+  }
   headers.set("Host", upstreamUrl.host);
   headers.set("X-Forwarded-Host", upstreamUrl.host);
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
@@ -1538,7 +1816,7 @@ async function fetchOrigin(request, env, targetUrl = new URL(request.url), optio
   const timeoutSignal = options.timeoutSignal ? AbortSignal.any([controller.signal, options.timeoutSignal]) : controller.signal;
   let response;
   try {
-    response = await (options.fetcher ?? fetch)(upstreamRequest(request, env, targetUrl), {
+    response = await (options.fetcher ?? fetch)(await upstreamRequest(request, env, targetUrl, options.originHandoff), {
       signal: timeoutSignal
     });
   } catch (error) {
@@ -1554,6 +1832,17 @@ async function fetchOrigin(request, env, targetUrl = new URL(request.url), optio
     });
   } finally {
     clearTimeout(timeout);
+  }
+  if (options.originHandoff?.shouldSetVisitorCookie) {
+    const headers = new Headers(response.headers);
+    headers.append("Set-Cookie", makeVisitorCookie(options.originHandoff.visitorId));
+    headers.set("Cache-Control", "private, no-store");
+    mergeVaryCookie(headers);
+    response = new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers
+    });
   }
   const location = response.headers.get("Location");
   if (!location || response.status < 300 || response.status >= 400) return response;
@@ -1581,13 +1870,49 @@ function parseRateLimitValue(raw, fallback, minimum, maximum) {
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(maximum, Math.max(minimum, parsed));
 }
-async function checkProxyRateLimit(request, env, lane) {
+async function decideProxyRateLimit(request, env, lane, maxPerIp, maxPerShop) {
   const windowMs = parseRateLimitValue(
     env.RATE_LIMIT_WINDOW_MS,
     DEFAULT_PROXY_RATE_LIMIT_WINDOW_MS,
     1e3,
     60 * 60 * 1e3
   );
+  const now = Date.now();
+  const clientIp = request.headers.get("CF-Connecting-IP")?.trim() || "unknown";
+  if (!env.RATE_LIMIT_DO) {
+    return checkLocalProxyRateLimit(lane, env.SHOP_ID, clientIp, windowMs, maxPerIp, maxPerShop, now);
+  }
+  try {
+    const stub = env.RATE_LIMIT_DO.get(env.RATE_LIMIT_DO.idFromName(env.SHOP_ID));
+    const timeoutSignal = AbortSignal.timeout(1e3);
+    let timeout;
+    const timeoutPromise = new Promise((_resolve, reject) => {
+      timeout = setTimeout(() => reject(timeoutSignal.reason ?? new Error("Rate limiter timed out")), 1e3);
+    });
+    const fetchPromise = stub.fetch("https://rate-limit.internal/check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lane, shopId: env.SHOP_ID, clientIp, windowMs, maxPerIp, maxPerShop }),
+      signal: timeoutSignal
+    });
+    fetchPromise.catch(() => void 0);
+    const response = await Promise.race([
+      fetchPromise,
+      timeoutPromise
+    ]).finally(() => {
+      if (timeout !== void 0) clearTimeout(timeout);
+    });
+    if (!response.ok) throw new Error(`Rate limiter returned ${response.status}`);
+    const payload = await response.json();
+    if (typeof payload.allowed !== "boolean" || typeof payload.retryAfterMs !== "number" || !Number.isFinite(payload.retryAfterMs) || payload.retryAfterMs < 0) {
+      throw new Error("Invalid rate limiter response");
+    }
+    return { allowed: payload.allowed, retryAfterMs: payload.retryAfterMs };
+  } catch {
+    return checkLocalProxyRateLimit(lane, env.SHOP_ID, clientIp, windowMs, maxPerIp, maxPerShop, Date.now());
+  }
+}
+async function checkProxyRateLimit(request, env, lane) {
   const maxPerIp = parseRateLimitValue(
     env.RATE_LIMIT_MAX_PROXY_REQUESTS_PER_IP,
     DEFAULT_PROXY_RATE_LIMIT_MAX_PER_IP,
@@ -1600,42 +1925,7 @@ async function checkProxyRateLimit(request, env, lane) {
     1,
     1e6
   );
-  const now = Date.now();
-  const clientIp = request.headers.get("CF-Connecting-IP")?.trim() || "unknown";
-  let decision;
-  if (env.RATE_LIMIT_DO) {
-    try {
-      const stub = env.RATE_LIMIT_DO.get(env.RATE_LIMIT_DO.idFromName(env.SHOP_ID));
-      const timeoutSignal = AbortSignal.timeout(1e3);
-      let timeout;
-      const timeoutPromise = new Promise((_resolve, reject) => {
-        timeout = setTimeout(() => reject(timeoutSignal.reason ?? new Error("Rate limiter timed out")), 1e3);
-      });
-      const fetchPromise = stub.fetch("https://rate-limit.internal/check", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lane, shopId: env.SHOP_ID, clientIp, windowMs, maxPerIp, maxPerShop }),
-        signal: timeoutSignal
-      });
-      fetchPromise.catch(() => void 0);
-      const response = await Promise.race([
-        fetchPromise,
-        timeoutPromise
-      ]).finally(() => {
-        if (timeout !== void 0) clearTimeout(timeout);
-      });
-      if (!response.ok) throw new Error(`Rate limiter returned ${response.status}`);
-      const payload = await response.json();
-      if (typeof payload.allowed !== "boolean" || typeof payload.retryAfterMs !== "number" || !Number.isFinite(payload.retryAfterMs) || payload.retryAfterMs < 0) {
-        throw new Error("Invalid rate limiter response");
-      }
-      decision = { allowed: payload.allowed, retryAfterMs: payload.retryAfterMs };
-    } catch {
-      decision = checkLocalProxyRateLimit(lane, env.SHOP_ID, clientIp, windowMs, maxPerIp, maxPerShop, Date.now());
-    }
-  } else {
-    decision = checkLocalProxyRateLimit(lane, env.SHOP_ID, clientIp, windowMs, maxPerIp, maxPerShop, now);
-  }
+  const decision = await decideProxyRateLimit(request, env, lane, maxPerIp, maxPerShop);
   if (decision.allowed) return null;
   return withWorkerVersion(new Response(JSON.stringify({ error: "Rate limit exceeded" }), {
     status: 429,
@@ -1653,6 +1943,23 @@ function checkLocalProxyRateLimit(lane, shopId, clientIp, windowMs, maxPerIp, ma
     removeStaleBuckets(proxyRateLimitBuckets, now, windowMs * 2);
   }
   return !ipDecision.allowed ? ipDecision : shopDecision ?? ipDecision;
+}
+async function allowQaConfigFetch(request, env) {
+  const maxPerIp = parseRateLimitValue(
+    env.RATE_LIMIT_MAX_QA_CONFIG_FETCHES_PER_IP,
+    DEFAULT_QA_CONFIG_FETCH_MAX_PER_IP,
+    1,
+    1e5
+  );
+  const maxPerShop = parseRateLimitValue(
+    env.RATE_LIMIT_MAX_QA_CONFIG_FETCHES_PER_SHOP,
+    DEFAULT_QA_CONFIG_FETCH_MAX_PER_SHOP,
+    1,
+    1e6
+  );
+  const decision = await decideProxyRateLimit(request, env, "qa-config", maxPerIp, maxPerShop);
+  if (!decision.allowed) qaConfigFetchesDropped += 1;
+  return decision.allowed;
 }
 async function proxyEvents(request, env, upstreamUrl = EVENTS_UPSTREAM_URL) {
   const lane = upstreamUrl === REPLAY_UPSTREAM_URL ? "replay" : "events";
@@ -1698,8 +2005,8 @@ function appendClientSdkWhenMissing(rewriter, shopId, useEventProxy, scriptUrl) 
 function isHtmlResponse(response) {
   return (response.headers.get("Content-Type") ?? "").toLowerCase().includes("text/html");
 }
-async function sdkOnlyResponse(request, env, targetUrl, skippedCount = 0, scriptUrl) {
-  const origin = await fetchOrigin(request, env, targetUrl);
+async function sdkOnlyResponse(request, env, targetUrl, skippedCount = 0, scriptUrl, originHandoff) {
+  const origin = await fetchOrigin(request, env, targetUrl, { originHandoff });
   if (!isHtmlResponse(origin)) {
     return withWorkerVersion(origin, "sdk-only-passthrough", skippedCount);
   }
@@ -1785,6 +2092,7 @@ async function handleStatusRequest(request, env) {
     ...!configured ? { status: "misconfigured" } : {},
     configured,
     workerVersion: EDGE_WORKER_VERSION,
+    originHandoff: "enabled",
     shopId: env.SHOP_ID ?? "",
     originUrl: originUrlValid ? sanitizeStatusUrl(env.ORIGIN_URL) : "invalid",
     configApiUrl: !configApiUrlValid ? "invalid" : sanitizeStatusUrl(resolveConfigApiUrl(env), true),
@@ -1793,6 +2101,7 @@ async function handleStatusRequest(request, env) {
     lastConfigSource: lastConfigSources.get(env.SHOP_ID) ?? "none",
     lastConfigError: lastConfigErrors.get(env.SHOP_ID) ?? null,
     rateLimitScope: env.RATE_LIMIT_DO ? "global-do" : "per-isolate",
+    qaConfigFetchesDropped,
     edgeModeHint: configured && ingestTokenSet ? "edge" : "sdk-only",
     ...!configured ? { problems } : {}
   };
@@ -1811,19 +2120,33 @@ function resolveCustomerPublicationRevision(config) {
 async function handleHtmlRequest(request, env, ctx) {
   const edgeRequestUrl = resolveEdgeBaselineRequestUrl(request.url);
   const targetingUrl = edgeRequestUrl.url.toString();
+  const cookieHeader = request.headers.get("Cookie");
+  const initialVisitorId = parseCookieValue(cookieHeader, "drip_uid") ?? randomHexId(16);
+  const shouldSetInitialVisitorCookie = parseCookieValue(cookieHeader, "drip_uid") == null;
+  const originHandoff = {
+    visitorId: initialVisitorId,
+    shouldSetVisitorCookie: false,
+    configRevision: null,
+    assignments: []
+  };
   const maxConfigBytes = parseRateLimitValue(
     env.MAX_CONFIG_BYTES,
     DEFAULT_MAX_CONFIG_BYTES,
     1,
     64 * 1024 * 1024
   );
+  const publicIdQaForce = qaForceForPublicIdPins(
+    resolveEdgeForceMap(targetingUrl, request.headers.get("cookie"))
+  );
+  const requestQaForce = publicIdQaForce && await allowQaConfigFetch(request, env) ? publicIdQaForce : null;
   const configResult = await fetchShopConfig({
     shopId: env.SHOP_ID,
     configuredUrl: env.CONFIG_API_URL,
     kv: env.APEX_EDGE_CACHE,
     cacheMode: env.CONFIG_CACHE_MODE === "off" ? "off" : "kv",
     maxResponseBytes: maxConfigBytes,
-    waitUntil: (promise) => ctx.waitUntil(promise)
+    waitUntil: (promise) => ctx.waitUntil(promise),
+    ...requestQaForce ? { qaForce: requestQaForce } : {}
   });
   lastConfigSources.set(env.SHOP_ID, configResult.source);
   if (configResult.error) {
@@ -1836,24 +2159,25 @@ async function handleHtmlRequest(request, env, ctx) {
   }
   if (!configResult.config) {
     if (configResult.source === "oversized") {
-      return sdkOnlyResponse(request, env, edgeRequestUrl.url, 1);
+      return sdkOnlyResponse(request, env, edgeRequestUrl.url, 1, void 0, originHandoff);
     }
     return withWorkerVersion(
-      await fetchOrigin(request, env, edgeRequestUrl.url),
+      await fetchOrigin(request, env, edgeRequestUrl.url, { originHandoff }),
       "config-unavailable"
     );
   }
+  originHandoff.configRevision = resolveCustomerPublicationRevision(configResult.config) ?? null;
+  const edgeConsentGranted = parseCookieValue(cookieHeader, "drip_consent") === "1";
+  const strictConsentPending = configResult.config.runtime?.consentMode?.enabled === true && !edgeConsentGranted;
+  if (strictConsentPending) originHandoff.visitorId = randomHexId(16);
+  originHandoff.shouldSetVisitorCookie = !strictConsentPending && shouldSetInitialVisitorCookie;
   if (getConfigByteLength(configResult.config) > maxConfigBytes) {
-    return sdkOnlyResponse(request, env, edgeRequestUrl.url, 1, configResult.config.delivery?.scriptUrl);
+    return sdkOnlyResponse(request, env, edgeRequestUrl.url, 1, configResult.config.delivery?.scriptUrl, originHandoff);
   }
-  if (decideVersionGuard(configResult.config) === "sdk-only" || !env.APEX_INGEST_TOKEN?.trim()) {
-    return sdkOnlyResponse(request, env, edgeRequestUrl.url, 0, configResult.config.delivery?.scriptUrl);
+  if (decideVersionGuard(configResult.config) === "sdk-only") {
+    return sdkOnlyResponse(request, env, edgeRequestUrl.url, 0, configResult.config.delivery?.scriptUrl, originHandoff);
   }
   const config = configResult.config;
-  const cookieHeader = request.headers.get("Cookie");
-  const initialVisitorId = parseCookieValue(cookieHeader, "drip_uid") ?? randomHexId(16);
-  const shouldSetInitialVisitorCookie = parseCookieValue(cookieHeader, "drip_uid") == null;
-  const edgeConsentGranted = parseCookieValue(cookieHeader, "drip_consent") === "1";
   const assignmentInputs = resolveCustomerAssignmentInputs(
     config,
     targetingUrl,
@@ -1865,9 +2189,11 @@ async function handleHtmlRequest(request, env, ctx) {
     shouldSetInitialVisitorCookie,
     config,
     edgeConsentGranted,
-    void 0,
+    () => originHandoff.visitorId,
     assignmentInputs.qaMode
   );
+  originHandoff.visitorId = visitor.visitorId;
+  originHandoff.shouldSetVisitorCookie = visitor.shouldSetVisitorCookie;
   const { forceMap, qaMode } = assignmentInputs;
   const stickySelections = visitor.strictConsentPending ? void 0 : assignmentInputs.stickySelections;
   const assignments = evaluateEdgeAssignments(
@@ -1881,13 +2207,17 @@ async function handleHtmlRequest(request, env, ctx) {
     qaMode,
     request.cf?.country
   );
+  originHandoff.assignments = edgeRequestUrl.baselineRequested ? [] : assignments;
+  if (!env.APEX_INGEST_TOKEN?.trim()) {
+    return sdkOnlyResponse(request, env, edgeRequestUrl.url, 0, config.delivery?.scriptUrl, originHandoff);
+  }
   const mutationAssignments = edgeRequestUrl.baselineRequested ? [] : filterMutationAssignments(assignments);
   const runtimeAssignments = edgeRequestUrl.baselineRequested ? [] : assignments.map(
     (assignment) => assignment.attributableOnly === true ? { ...assignment, mutations: [] } : assignment
   );
   const mutations = flattenMutations(mutationAssignments);
   const holdoutConfigEpoch = parseHoldoutConfigEpoch(config.holdout_config_updated_at);
-  const runtimeScriptRequired = runtimeAssignments.some(
+  const runtimeScriptRequired = request.headers.get("x-drip-runtime-mode")?.trim().toLowerCase() !== "off" && runtimeAssignments.some(
     (assignment) => assignment.attributableOnly === true || assignment.mutations.length > 0
   );
   const canUseHtmlCache = canUseCustomerHtmlCache({
@@ -1896,7 +2226,7 @@ async function handleHtmlRequest(request, env, ctx) {
     programCohort: visitor.programCohort,
     holdoutConfigEpoch,
     cookieHeader
-  }) && !edgeRequestUrl.baselineRequested;
+  }) && !originHandoff.shouldSetVisitorCookie && !edgeRequestUrl.baselineRequested;
   const htmlCacheKey = buildCustomerHtmlCacheKey(
     edgeRequestUrl.url,
     env,
@@ -1918,7 +2248,7 @@ async function handleHtmlRequest(request, env, ctx) {
       }), "html-cache");
     }
   }
-  const origin = await fetchOrigin(request, env, edgeRequestUrl.url);
+  const origin = await fetchOrigin(request, env, edgeRequestUrl.url, { originHandoff });
   if (!isHtmlResponse(origin)) return withWorkerVersion(origin, "content-type-passthrough");
   const rewriter = new HTMLRewriter();
   const maxMutationBytes = parseRateLimitValue(
@@ -1928,17 +2258,19 @@ async function handleHtmlRequest(request, env, ctx) {
     16 * 1024 * 1024
   );
   let skippedMutationCount = 0;
+  const preApplied = [];
   for (const assignment of mutationAssignments) {
-    for (const mutation of assignment.mutations) {
+    for (const [index, mutation] of assignment.mutations.entries()) {
+      if (!mutation || typeof mutation !== "object") continue;
       if (getMutationByteLength(mutation) > maxMutationBytes) {
         skippedMutationCount += 1;
         continue;
       }
-      if (mutation.action === "insertBefore" || mutation.action === "insertAfter") {
-        continue;
-      }
       try {
-        applyMutationToRewriter(rewriter, mutation);
+        const stamp = { experimentId: assignment.experimentId, index };
+        applyMutationToRewriter(rewriter, mutation, stamp);
+        const applied = edgePreAppliedMutation(mutation, stamp);
+        if (applied) preApplied.push(applied);
       } catch {
       }
     }
@@ -1953,7 +2285,8 @@ async function handleHtmlRequest(request, env, ctx) {
     visitor.programCohort,
     visitor.strictConsentPending ? visitor.visitorId : void 0,
     qaMode,
-    holdoutConfigEpoch
+    holdoutConfigEpoch,
+    preApplied
   ) : "";
   appendEdgeRuntimeScript(rewriter, runtimeScript, "");
   appendClientSdkWhenMissing(rewriter, env.SHOP_ID, true, config.delivery?.scriptUrl);
@@ -1962,9 +2295,6 @@ async function handleHtmlRequest(request, env, ctx) {
   headers.delete("Content-Length");
   headers.set("Cache-Control", "private, no-store");
   mergeVaryCookie(headers);
-  if (visitor.shouldSetVisitorCookie) {
-    headers.append("Set-Cookie", makeVisitorCookie(visitor.visitorId));
-  }
   const response = withWorkerVersion(new Response(transformed.body, {
     status: transformed.status,
     statusText: transformed.statusText,
@@ -2003,9 +2333,6 @@ var index_default = {
 };
 export {
   ApexRateLimiterDO,
-  DEFAULT_MAX_CONFIG_BYTES,
-  DEFAULT_MAX_MUTATION_BYTES,
-  DEFAULT_ORIGIN_FETCH_TIMEOUT_MS,
   appendClientSdkWhenMissing,
   buildCustomerHtmlCacheKey,
   canUseCustomerHtmlCache,
@@ -2013,6 +2340,7 @@ export {
   fetchOrigin,
   getMutationByteLength,
   handleFetch,
+  qaForceForPublicIdPins,
   resolveCustomerAssignmentInputs,
   resolveCustomerPublicationRevision
 };
