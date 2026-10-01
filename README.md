@@ -1,8 +1,20 @@
 # Apex Edge Worker
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/drip-apex-labs/edge-worker-template)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/drip-apex-labs/edge-worker-template/tree/v1.2.6)
 
 This repository is the deployable template for the [Apex Edge Worker](https://github.com/drip-apex-labs/Apex/tree/main/packages/edge-worker). It contains a prebuilt worker, so a clone can deploy without a build step.
+
+## Pin a version
+
+Releases are tagged `v<version>`, with notes at https://github.com/drip-apex-labs/edge-worker-template/releases. Pin a tag instead of `main` so updates are deliberate.
+
+For a manual deployment, clone the current version first:
+
+```sh
+git clone --branch v1.2.6 https://github.com/drip-apex-labs/edge-worker-template.git
+```
+
+The worker reports its version in the `x-drip-edge-worker` response header. Apex sends a minimum version; an older worker stops assigning at the edge and only injects the Apex SDK, which then runs the tests in the browser.
 
 ## Deploy
 
