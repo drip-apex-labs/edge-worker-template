@@ -2,6 +2,11 @@
 
 Changes to the Apex Edge Worker, newest first, in Keep a Changelog format.
 
+## [1.2.7] - 2026-10-03
+
+### Changed
+- Targeting now uses the same shared matcher as the browser SDK. A customer regular expression that fails the shared safety check (nested repeats, quantified backreferences, or two or more unbounded repeats with no literal between them, such as `a+a+`) is no longer run at the edge; that experiment is served by the SDK alone. `url.query` conditions, empty `contains` values and missing countries now match exactly as in the SDK. (#7682)
+
 ## [1.2.6] - 2026-09-30
 
 ### Changed

@@ -1,4 +1,4 @@
-// Apex Edge Worker v1.2.6 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
+// Apex Edge Worker v1.2.7 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
 // src/limits.ts
 var DEFAULT_ORIGIN_FETCH_TIMEOUT_MS = 5e3;
 var DEFAULT_MAX_MUTATION_BYTES = 256 * 1024;
@@ -47,7 +47,7 @@ if(typeof MutationObserver==='function'&&document.documentElement){edgeGuardInst
 })();`;
 }
 
-// ../event-schema/src/experiment-servability.ts
+// ../shared-runtime/src/experiment-servability.ts
 function isExperimentServable(experiment, context) {
   if (!experiment || experiment.runtime_disabled === true) return false;
   const environment = context.environment.trim().toLowerCase() || "production";
@@ -55,6 +55,286 @@ function isExperimentServable(experiment, context) {
   if (experimentEnvironment && experimentEnvironment !== environment) return false;
   if (experiment.status === "running") return true;
   return context.qaMode === true && (experiment.status === "qa" || experiment.status === "draft" || experiment.status === "awaiting_client_approval" || experiment.status === "changes_requested" || experiment.status === "client_approved" || experiment.status === "ready_to_launch" || experiment.status === "paused" || experiment.status === "completed");
+}
+
+// ../shared-runtime/src/targeting-core.ts
+function isRegexOuterQuantifierStart(pattern, index) {
+  return pattern[index] !== "?" && isRegexQuantifierStart(pattern, index);
+}
+function isRegexQuantifierStart(pattern, index) {
+  const char = pattern[index];
+  if (char === "*" || char === "+" || char === "?") return true;
+  if (char !== "{") return false;
+  const end = pattern.indexOf("}", index + 1);
+  if (end === -1) return false;
+  return /^\{\d+(?:,\d*)?\}$/.test(pattern.slice(index, end + 1));
+}
+function isSafeRegexPattern(pattern) {
+  if (!pattern || pattern.length > MAX_PATTERN_LENGTH) return false;
+  const groups = [];
+  let escaped = false;
+  let inClass = false;
+  let hasBackreference = false;
+  let hasQuantifiedGroup = false;
+  let hasQuantifierInGroup = false;
+  let hasQuantifiedBackreference = false;
+  let unboundedRepeats = 0;
+  let previousWasQuantifier = false;
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    const quantifierFollows = previousWasQuantifier;
+    previousWasQuantifier = false;
+    if (escaped) {
+      escaped = false;
+      if (!inClass && !/[dDwWsSbB]/.test(char) && !isRegexQuantifierStart(pattern, index + 1)) unboundedRepeats = 0;
+      continue;
+    }
+    if (char === "\\") {
+      const numericBackreference = /^[1-9]$/.test(pattern[index + 1] ?? "");
+      const namedBackreference = pattern[index + 1] === "k" ? pattern.slice(index + 2).match(/^<[^>]+>/)?.[0] : void 0;
+      if (numericBackreference || namedBackreference) {
+        hasBackreference = true;
+        const backreferenceEnd = numericBackreference ? index + 2 : index + 2 + namedBackreference.length;
+        if (isRegexQuantifierStart(pattern, backreferenceEnd)) {
+          hasQuantifiedBackreference = true;
+        }
+        index = backreferenceEnd - 1;
+      } else {
+        escaped = true;
+      }
+      continue;
+    }
+    if (char === "[") {
+      inClass = true;
+      continue;
+    }
+    if (char === "]") {
+      inClass = false;
+      continue;
+    }
+    if (inClass) continue;
+    if (char === "(") {
+      groups.push({ hasAlternation: false, hasQuantifier: false });
+      continue;
+    }
+    if (char === "|") {
+      const current = groups[groups.length - 1];
+      if (current) current.hasAlternation = true;
+      continue;
+    }
+    if (isRegexQuantifierStart(pattern, index)) {
+      if (char === "?" && pattern[index - 1] === "(") continue;
+      const current = groups[groups.length - 1];
+      if (current) {
+        current.hasQuantifier = true;
+        hasQuantifierInGroup = true;
+      }
+      if ((char === "+" || char === "*") && !quantifierFollows) unboundedRepeats += 1;
+      if (char === "{") {
+        const close = pattern.indexOf("}", index + 1);
+        const bounds = close > index ? pattern.slice(index + 1, close).split(",") : [];
+        if (bounds.length === 2 && (bounds[1].trim() === "" || Number(bounds[1]) > 16)) unboundedRepeats += 1;
+        index = close;
+      }
+      previousWasQuantifier = true;
+      continue;
+    }
+    if (char !== ")" && char !== "." && char !== "^" && char !== "$" && !isRegexQuantifierStart(pattern, index + 1)) {
+      unboundedRepeats = 0;
+    }
+    if (char === ")") {
+      const group = groups.pop();
+      if (!group) return false;
+      const quantified = isRegexOuterQuantifierStart(pattern, index + 1);
+      hasQuantifiedGroup = hasQuantifiedGroup || quantified;
+      if (quantified && (group.hasQuantifier || group.hasAlternation))
+        return false;
+      const parent = groups[groups.length - 1];
+      if (parent) {
+        parent.hasQuantifier = parent.hasQuantifier || group.hasQuantifier || quantified;
+        parent.hasAlternation = parent.hasAlternation || group.hasAlternation;
+      }
+    }
+  }
+  if (unboundedRepeats >= 2) return false;
+  return !escaped && !inClass && groups.length === 0 && !(hasBackreference && (hasQuantifiedGroup || hasQuantifierInGroup || hasQuantifiedBackreference));
+}
+var MAX_PATTERN_LENGTH = 1024;
+var MAX_CACHE_ENTRIES = 256;
+var regexCache = /* @__PURE__ */ new Map();
+function cacheRegex(pattern, compiled) {
+  if (!regexCache.has(pattern) && regexCache.size >= MAX_CACHE_ENTRIES) {
+    const oldest = regexCache.keys().next().value;
+    if (oldest !== void 0) regexCache.delete(oldest);
+  }
+  regexCache.set(pattern, compiled);
+}
+function safeRegexTestDetailed(pattern, input, executeUnsafePatterns) {
+  if (!pattern || pattern.length > MAX_PATTERN_LENGTH) return { matched: false };
+  if (!executeUnsafePatterns && !isSafeRegexPattern(pattern)) {
+    try {
+      new RegExp(pattern);
+      return { matched: false, indeterminate: true };
+    } catch {
+      return { matched: false };
+    }
+  }
+  if (regexCache.has(pattern)) {
+    const cached = regexCache.get(pattern);
+    return { matched: cached ? cached.test(input) : false };
+  }
+  let compiled = null;
+  try {
+    compiled = new RegExp(pattern);
+  } catch {
+    compiled = null;
+  }
+  cacheRegex(pattern, compiled);
+  return { matched: compiled ? compiled.test(input) : false };
+}
+function safeRegexTest(pattern, input) {
+  return safeRegexTestDetailed(pattern, input, true).matched;
+}
+function evalSimpleUrlPart(actual, pattern, isPath) {
+  try {
+    let escaped = pattern.replace(/[*.+?^${}()|[\]\\]/g, "\\$&").replace(/_____/g, ".*");
+    if (isPath) escaped = "\\/?" + escaped.replace(/(^\/|\/$)/g, "") + "\\/?";
+    return new RegExp("^" + escaped + "$", "i").test(actual);
+  } catch {
+    return false;
+  }
+}
+function evalSimpleUrlTarget(actual, pattern) {
+  try {
+    const expected = new URL(pattern.replace(/^([^:/?]*)\./i, "https://$1.").replace(/\*/g, "_____"), "https://_____");
+    const components = [
+      [actual.host, expected.host, false],
+      [actual.pathname, expected.pathname, true]
+    ];
+    if (expected.hash) components.push([actual.hash, expected.hash, false]);
+    expected.searchParams.forEach((value, key) => components.push([actual.searchParams.get(key) || "", value, false]));
+    return !components.some(([value, expectedValue, path]) => !evalSimpleUrlPart(value, expectedValue, path));
+  } catch {
+    return false;
+  }
+}
+function unescapeRegexLiteral(value) {
+  return value.replace(/\\([.*+?^${}()|[\]\\\/])/g, "$1");
+}
+function evaluateUrlRuleDetailed(url, rule, options) {
+  const executeUnsafePatterns = options?.executeUnsafePatterns !== false;
+  try {
+    const parsed = new URL(url, "https://_");
+    const matchType = rule.matchType ?? rule.match_type;
+    if (matchType === "contains") {
+      const actual = parsed.href.toLowerCase();
+      const pattern = rule.pattern.toLowerCase();
+      return { matched: actual.includes(pattern) || actual.includes(unescapeRegexLiteral(pattern)) };
+    }
+    if (rule.type === "regex") {
+      const escaped = rule.pattern.replace(/([^\\])\//g, "$1\\/");
+      const absolute = safeRegexTestDetailed(escaped, parsed.href, executeUnsafePatterns);
+      if (absolute.matched || absolute.indeterminate) return absolute;
+      return safeRegexTestDetailed(escaped, parsed.href.substring(parsed.origin.length), executeUnsafePatterns);
+    }
+    return { matched: evalSimpleUrlTarget(parsed, rule.pattern) };
+  } catch {
+    return { matched: false };
+  }
+}
+function regexRequiresClientEvaluation(pattern) {
+  if (!pattern || pattern.length > MAX_PATTERN_LENGTH || isSafeRegexPattern(pattern)) return false;
+  try {
+    new RegExp(pattern);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function urlRuleRequiresClientEvaluation(rule) {
+  if (!rule || rule.type !== "regex" || typeof rule.pattern !== "string") return false;
+  if ((rule.matchType ?? rule.match_type) === "contains") return false;
+  return regexRequiresClientEvaluation(rule.pattern.replace(/([^\\])\//g, "$1\\/"));
+}
+function segmentConditionRequiresClientEvaluation(condition, expected = condition.value) {
+  const first = stringValues(expected)[0] ?? "";
+  if (condition.operator === "matches_regex") return regexRequiresClientEvaluation(first);
+  if (condition.operator === "matches_wildcard") return regexRequiresClientEvaluation(wildcard(first));
+  return false;
+}
+var LEGACY_RAW_QUERY_OPERATORS = /* @__PURE__ */ new Set(["contains", "not_contains", "starts_with", "ends_with"]);
+function resolveUrlQueryConditionOperands(condition, search) {
+  const raw = String(condition.value ?? "");
+  if (LEGACY_RAW_QUERY_OPERATORS.has(String(condition.operator)) && !raw.includes("=")) {
+    return { actual: search, expected: condition.value };
+  }
+  const trimmed = raw.trim();
+  const index = trimmed.indexOf("=");
+  const name = (index < 0 ? trimmed : trimmed.slice(0, index)).trim();
+  const actual = name ? new URLSearchParams(search).get(name) ?? void 0 : void 0;
+  if (condition.operator === "is_set" || condition.operator === "is_empty") {
+    return { actual, expected: condition.value };
+  }
+  return { actual, expected: index < 0 ? "" : trimmed.slice(index + 1) };
+}
+function stringValues(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  if (value == null) return [];
+  return [String(value)];
+}
+function meaningful(value) {
+  if (value == null) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  return typeof value !== "string" || value.trim().length > 0;
+}
+function compareNumber(actual, expected, predicate) {
+  const a = Number(Array.isArray(actual) ? actual[0] : actual);
+  const b = Number(Array.isArray(expected) ? expected[0] : expected);
+  return Number.isFinite(a) && Number.isFinite(b) && predicate(a, b);
+}
+function wildcard(pattern) {
+  return "^" + pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$";
+}
+function matchSegmentConditionValues(condition, actual, expected = condition.value) {
+  const actualValues = stringValues(actual);
+  const expectedValues = stringValues(expected);
+  const first = expectedValues[0] ?? "";
+  switch (condition.operator) {
+    case "equals":
+      return actualValues.some((value) => value === String(expected ?? ""));
+    case "not_equals":
+      return !actualValues.some((value) => value === String(expected ?? ""));
+    case "contains":
+      return actualValues.some((value) => expectedValues.length > 1 ? expectedValues.includes(value) : value.includes(first));
+    case "not_contains":
+      return !actualValues.some((value) => expectedValues.length > 1 ? expectedValues.includes(value) : value.includes(first));
+    case "starts_with":
+      return actualValues.some((value) => value.startsWith(first));
+    case "ends_with":
+      return actualValues.some((value) => value.endsWith(first));
+    case "is_set":
+      return meaningful(actual);
+    case "is_empty":
+      return !meaningful(actual);
+    case "in":
+      return actualValues.some((value) => expectedValues.includes(value));
+    case "not_in":
+      return !actualValues.some((value) => expectedValues.includes(value));
+    case "matches_wildcard":
+      return actualValues.some((value) => safeRegexTest(wildcard(first), value));
+    case "matches_regex":
+      return actualValues.some((value) => safeRegexTest(first, value));
+    case "greater_than":
+      return compareNumber(actual, expected, (a, b) => a > b);
+    case "greater_than_or_equal":
+      return compareNumber(actual, expected, (a, b) => a >= b);
+    case "less_than":
+      return compareNumber(actual, expected, (a, b) => a < b);
+    case "less_than_or_equal":
+      return compareNumber(actual, expected, (a, b) => a <= b);
+    default:
+      return false;
+  }
 }
 
 // ../shared-runtime/src/currency.ts
@@ -358,58 +638,17 @@ function parseCookieValue(cookieHeader, key) {
 function makeVisitorCookie(value) {
   return DRIP_UID_COOKIE + "=" + encodeURIComponent(value) + "; Max-Age=31536000; Path=/; SameSite=Lax";
 }
-function evalSimpleUrlPart(actual, pattern, isPath) {
-  try {
-    let escaped = pattern.replace(/[*.+?^${}()|[\]\\]/g, "\\$&").replace(/_____/g, ".*");
-    if (isPath) {
-      escaped = "\\/?" + escaped.replace(/(^\/|\/$)/g, "") + "\\/?";
-    }
-    return new RegExp("^" + escaped + "$", "i").test(actual);
-  } catch {
-    return false;
-  }
-}
-function evalSimpleUrlTarget(actual, pattern) {
-  try {
-    const expected = new URL(
-      pattern.replace(/^([^:/?]*)\./i, "https://$1.").replace(/\*/g, "_____"),
-      "https://_____"
-    );
-    const comps = [
-      [actual.host, expected.host, false],
-      [actual.pathname, expected.pathname, true]
-    ];
-    if (expected.hash) comps.push([actual.hash, expected.hash, false]);
-    expected.searchParams.forEach((v, k) => {
-      comps.push([actual.searchParams.get(k) || "", v, false]);
-    });
-    return !comps.some((c) => !evalSimpleUrlPart(c[0], c[1], c[2]));
-  } catch {
-    return false;
-  }
-}
-function unescapeRegexLiteral(value) {
-  return value.replace(/\\([.*+?^${}()|[\]\\\/])/g, "$1");
-}
 function evalUrlRule(url, rule) {
-  try {
-    if (!rule.pattern) return false;
-    const parsed = new URL(url, "https://_");
-    const matchType = rule.matchType ?? rule.match_type;
-    if (matchType === "contains") {
-      const actual = parsed.href.toLowerCase();
-      const pattern = rule.pattern.toLowerCase();
-      return actual.includes(pattern) || actual.includes(unescapeRegexLiteral(pattern));
-    }
-    if (rule.type === "regex") {
-      const escaped = rule.pattern.replace(/([^\\])\//g, "$1\\/");
-      const regex = new RegExp(escaped);
-      return regex.test(parsed.href) || regex.test(parsed.href.substring(parsed.origin.length));
-    }
-    return evalSimpleUrlTarget(parsed, rule.pattern);
-  } catch {
-    return false;
-  }
+  if (!rule || typeof rule.pattern !== "string" || !rule.pattern) return false;
+  return evaluateUrlRuleDetailed(url, rule, { executeUnsafePatterns: false }).matched;
+}
+function edgeUrlRuleRequiresClientEvaluation(rule) {
+  return Boolean(
+    rule && typeof rule === "object" && typeof rule.pattern === "string" && rule.pattern && urlRuleRequiresClientEvaluation(rule)
+  );
+}
+function edgeUrlRulesRequireClientEvaluation(rules) {
+  return Array.isArray(rules) && rules.some(edgeUrlRuleRequiresClientEvaluation);
 }
 function matchUrlRules(url, rules) {
   if (!rules.length) return true;
@@ -458,39 +697,37 @@ var EDGE_SEGMENT_CONDITION_OPERATORS = /* @__PURE__ */ new Set([
 function edgeSegmentConditionOperatorIsSupported(operator) {
   return typeof operator === "string" && EDGE_SEGMENT_CONDITION_OPERATORS.has(operator);
 }
-function matchEdgeSegmentCondition(url, country, condition) {
-  if (!edgeSegmentConditionOperatorIsSupported(condition.operator)) return false;
-  let actual = "";
+function edgeSegmentConditionOperands(url, country, condition) {
+  let parsed;
   try {
-    const parsed = new URL(url, "https://_");
-    if (condition.signal === "url.full") actual = parsed.href;
-    else if (condition.signal === "url.path") actual = parsed.pathname;
-    else if (condition.signal === "url.query") actual = stripQaParams(parsed.search);
-    else if (condition.signal === "geo.country") actual = country ?? "";
-    else return false;
+    parsed = new URL(url, "https://_");
   } catch {
-    return false;
+    return null;
   }
-  const expected = String(condition.value ?? "");
-  if (!expected && condition.operator !== "equals") return false;
-  if (condition.operator === "equals") return actual === expected;
-  if (condition.operator === "contains") return actual.includes(expected);
-  if (condition.operator === "matches_wildcard") {
-    const escaped = expected.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
-    try {
-      return new RegExp(`^${escaped}$`).test(actual);
-    } catch {
-      return false;
-    }
+  if (condition.signal === "url.full") return { actual: parsed.href, expected: condition.value };
+  if (condition.signal === "url.path") return { actual: parsed.pathname, expected: condition.value };
+  if (condition.signal === "url.query") {
+    return resolveUrlQueryConditionOperands(condition, stripQaParams(parsed.search));
   }
-  if (condition.operator === "matches_regex") {
-    try {
-      return new RegExp(expected).test(actual);
-    } catch {
-      return false;
-    }
-  }
-  return false;
+  if (condition.signal === "geo.country") return { actual: country || void 0, expected: condition.value };
+  return null;
+}
+function edgeSegmentConditionRequiresClientEvaluation(condition) {
+  if (!condition || typeof condition !== "object") return false;
+  const expected = condition.signal === "url.query" ? resolveUrlQueryConditionOperands(condition, "").expected : condition.value;
+  return segmentConditionRequiresClientEvaluation(condition, expected);
+}
+function matchEdgeSegmentCondition(url, country, condition) {
+  if (!condition || typeof condition !== "object") return false;
+  if (!edgeSegmentConditionOperatorIsSupported(condition.operator)) return false;
+  if (edgeSegmentConditionRequiresClientEvaluation(condition)) return false;
+  const operands = edgeSegmentConditionOperands(url, country, condition);
+  if (!operands) return false;
+  return matchSegmentConditionValues(
+    condition,
+    operands.actual,
+    operands.expected
+  );
 }
 function matchEdgeSegmentRule(url, country, rule) {
   const groups = Array.isArray(rule.rules?.groups) ? rule.rules.groups.filter((group) => Array.isArray(group) && group.length > 0) : [];
@@ -527,7 +764,7 @@ function edgeSegmentRulesAreUrlOnly(rules) {
     const conditions = groupedConditions.length ? groupedConditions : Array.isArray(rule.rules?.conditions) ? rule.rules.conditions : [];
     if (!conditions.length) return false;
     return conditions.every(
-      (condition) => condition.js == null && edgeSegmentConditionOperatorIsSupported(condition.operator) && (condition.signal === "url.full" || condition.signal === "url.path" || condition.signal === "url.query" || condition.signal === "geo.country")
+      (condition) => condition.js == null && edgeSegmentConditionOperatorIsSupported(condition.operator) && !edgeSegmentConditionRequiresClientEvaluation(condition) && (condition.signal === "url.full" || condition.signal === "url.path" || condition.signal === "url.query" || condition.signal === "geo.country")
     );
   });
 }
@@ -544,12 +781,12 @@ function edgeAudienceTargetingIsWorkerReproducible(targeting) {
   return true;
 }
 function edgeUrlTargetingIsWorkerReproducible(targeting) {
-  return !Array.isArray(targeting.pageRules) || targeting.pageRules.every(edgePageRuleIsUrlDriven);
+  return !edgeUrlRulesRequireClientEvaluation(targeting.url) && (!Array.isArray(targeting.pageRules) || targeting.pageRules.every(edgePageRuleIsUrlDriven));
 }
 function edgePageRuleIsUrlDriven(rule) {
   if (!rule || typeof rule !== "object") return false;
   const mode = rule.trigger?.mode;
-  return !rule.advancedCondition?.code?.trim() && !rule.trigger?.triggerJs?.trim() && mode !== "manual-callback" && mode !== "manual-api";
+  return !rule.advancedCondition?.code?.trim() && !rule.trigger?.triggerJs?.trim() && mode !== "manual-callback" && mode !== "manual-api" && !edgeUrlRulesRequireClientEvaluation(rule.includeRules) && !edgeUrlRulesRequireClientEvaluation(rule.excludeRules);
 }
 function matchesEdgeAudienceTargeting(targeting, url, country) {
   if (!targeting) return true;
@@ -752,9 +989,13 @@ function evaluateEdgeAssignments(experiments, url, visitorId, exclusionGroups, s
       variationIndex = idx;
     }
     if (!variation?.id) continue;
-    const activeUrlBlock = !variation.isControl && Array.isArray(variation.urlBlocks) ? variation.urlBlocks.find(
+    const urlBlocks = !variation.isControl && Array.isArray(variation.urlBlocks) ? variation.urlBlocks : [];
+    const urlBlocksRequireClient = urlBlocks.some(
+      (block) => edgeUrlRulesRequireClientEvaluation(block?.urlRules)
+    );
+    const activeUrlBlock = urlBlocksRequireClient ? void 0 : urlBlocks.find(
       (block) => Array.isArray(block?.urlRules) && matchUrlRules(url, block.urlRules)
-    ) : void 0;
+    );
     const seenPageIds = /* @__PURE__ */ new Set();
     assignments.push({
       experimentId: experiment.id,
@@ -776,7 +1017,7 @@ function evaluateEdgeAssignments(experiments, url, visitorId, exclusionGroups, s
       experimentType: experiment.experimentType === "redirect" ? "redirect" : "mutation",
       serverSideRedirectEligible: attributableOnly ? void 0 : experiment.serverSideRedirectEligible,
       redirectUrl: !attributableOnly && typeof variation.redirectUrl === "string" ? variation.redirectUrl : void 0,
-      mutations: attributableOnly ? [] : activeUrlBlock ? Array.isArray(activeUrlBlock.mutations) ? activeUrlBlock.mutations : [] : Array.isArray(variation.mutations) ? variation.mutations : [],
+      mutations: attributableOnly || urlBlocksRequireClient ? [] : activeUrlBlock ? Array.isArray(activeUrlBlock.mutations) ? activeUrlBlock.mutations : [] : Array.isArray(variation.mutations) ? variation.mutations : [],
       goals: normalizeEdgeGoals(experiment.goals)
     });
   }
@@ -1540,7 +1781,7 @@ function classifyRequest(request) {
 }
 
 // src/version.ts
-var EDGE_WORKER_VERSION = "1.2.6";
+var EDGE_WORKER_VERSION = "1.2.7";
 var MINIMUM_COMPATIBLE_ENGINE_VERSION_FIELD = "minimumEdgeEngineVersion";
 function parseVersion(value) {
   const match = value.trim().match(
