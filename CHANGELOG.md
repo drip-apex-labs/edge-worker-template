@@ -2,6 +2,11 @@
 
 Changes to the Apex Edge Worker, newest first, in Keep a Changelog format.
 
+## [1.2.8] - 2026-10-06
+
+### Changed
+- Updated compatibility with forced-preview QA asset diagnostics in storefront configuration. (#8216)
+
 ## [1.2.7] - 2026-10-03
 
 ### Changed
