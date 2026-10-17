@@ -1,4 +1,4 @@
-// Apex Edge Worker v1.2.8 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
+// Apex Edge Worker v1.2.9 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
 // src/limits.ts
 var DEFAULT_ORIGIN_FETCH_TIMEOUT_MS = 5e3;
 var DEFAULT_MAX_MUTATION_BYTES = 256 * 1024;
@@ -409,7 +409,7 @@ function chooseVariation(hashValue, weights) {
 
 // ../shared-runtime/src/force-map.ts
 function parseForceString(value) {
-  if (value.trim() === "~") return {};
+  if (isHeldForce(value.trim())) return {};
   let map = null;
   for (const pair of value.split(",")) {
     const [rawExperimentId, rawVariationId] = pair.split(":");
@@ -425,7 +425,7 @@ function resolveForceMap(map, experiments) {
     const experiment = experiments?.find(
       (candidate) => Boolean(candidate?.id) && Array.isArray(candidate.variations) && (candidate.id === experimentHandle || candidate.publicId === experimentHandle)
     );
-    resolved[experiment ? experiment.id : experimentHandle] = experiment ? experiment.variations.find(
+    resolved[experiment ? experiment.id : experimentHandle] = experiment && !isHeldForce(variationHandle) ? experiment.variations.find(
       (candidate) => candidate.id === variationHandle || candidate.publicId === variationHandle
     )?.id ?? variationHandle : variationHandle;
   }
@@ -452,6 +452,13 @@ function stripQaParams(search) {
   if (!raw) return "";
   const kept = raw.split("&").filter((segment) => !QA_URL_PARAMS.includes(segment.split("=")[0]));
   return kept.length ? "?" + kept.join("&") : "";
+}
+var FORCE_HELD = "~";
+function isHeldForce(variation) {
+  return variation === FORCE_HELD;
+}
+function pinnedForceIds(map) {
+  return Object.keys(map ?? {}).filter((id) => !isHeldForce(map[id]));
 }
 
 // ../edge-engine/src/deps.ts
@@ -958,6 +965,7 @@ function evaluateEdgeAssignments(experiments, url, visitorId, exclusionGroups, s
     }
     if (experiment.runtime_disabled === true) continue;
     const forcedVariationId = forceMap[experiment.id];
+    if (isHeldForce(forcedVariationId)) continue;
     if (!forcedVariationId) {
       if (!isExperimentServable(experiment, { qaMode, environment: "production" })) continue;
       if (weekdayScheduleBlocksDelivery2(experiment.weekdaySchedule, now)) continue;
@@ -1025,7 +1033,7 @@ function evaluateEdgeAssignments(experiments, url, visitorId, exclusionGroups, s
     assignments,
     exclusionGroups,
     visitorId,
-    new Set(Object.keys(forceMap)),
+    new Set(pinnedForceIds(forceMap)),
     stickyExclusionSelections
   );
 }
@@ -1033,7 +1041,7 @@ function hasValidEdgeForce(experiments, forceMap) {
   const resolvedForceMap = resolveForceMap(forceMap, experiments) ?? {};
   return Object.entries(resolvedForceMap).some(
     ([experimentId, variationId]) => experiments.some(
-      (experiment) => experiment.id === experimentId && experiment.variations.some((variation) => variation.id === variationId)
+      (experiment) => experiment.id === experimentId && (isHeldForce(variationId) || experiment.variations.some((variation) => variation.id === variationId))
     )
   );
 }
@@ -1781,7 +1789,7 @@ function classifyRequest(request) {
 }
 
 // src/version.ts
-var EDGE_WORKER_VERSION = "1.2.8";
+var EDGE_WORKER_VERSION = "1.2.9";
 var MINIMUM_COMPATIBLE_ENGINE_VERSION_FIELD = "minimumEdgeEngineVersion";
 function parseVersion(value) {
   const match = value.trim().match(

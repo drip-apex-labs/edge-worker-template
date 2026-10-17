@@ -2,6 +2,11 @@
 
 Changes to the Apex Edge Worker, newest first, in Keep a Changelog format.
 
+## [1.2.9] - 2026-10-17
+
+### Added
+- A QA force of `EXP:~` holds that experiment at Original: the edge assigns and renders nothing for it, and other experiments are evaluated normally. (#5013)
+
 ## [1.2.8] - 2026-10-06
 
 ### Changed
