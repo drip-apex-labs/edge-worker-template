@@ -2,6 +2,12 @@
 
 Changes to the Apex Edge Worker, newest first, in Keep a Changelog format.
 
+## [1.2.10] - 2026-10-18
+
+### Changed
+
+- Experiments whose visitors are counted at checkout no longer send a storefront exposure from the edge runtime; assignment, goals and the Shopify assignment sync are unchanged. (#10015)
+
 ## [1.2.9] - 2026-10-17
 
 ### Added
