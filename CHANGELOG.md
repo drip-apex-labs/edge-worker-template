@@ -2,6 +2,11 @@
 
 Changes to the Apex Edge Worker, newest first, in Keep a Changelog format.
 
+## [1.2.11] - 2026-10-19
+
+### Changed
+- The shared targeting engine can evaluate device rules for price and offer tests from the device class the Apex SDK reports. The edge worker passes no device class, so its own assignments are unchanged. (#9041)
+
 ## [1.2.10] - 2026-10-18
 
 ### Changed

@@ -1,61 +1,8 @@
-// Apex Edge Worker v1.2.10 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
+// Apex Edge Worker v1.2.11 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
 // src/limits.ts
 var DEFAULT_ORIGIN_FETCH_TIMEOUT_MS = 5e3;
 var DEFAULT_MAX_MUTATION_BYTES = 256 * 1024;
 var DEFAULT_MAX_CONFIG_BYTES = 2 * 1024 * 1024;
-
-// ../edge-engine/src/edge-guard-constants.ts
-var DEFAULT_CAP = 24;
-var LOOP_FRAME_LIMIT = 6;
-var CONSECUTIVE_FRAME_MS = 34;
-var GUARD_TIMEOUT_MS = 8e3;
-
-// ../edge-engine/src/edge-guard.ts
-function buildEdgeGuard(preApplied) {
-  if (preApplied.length === 0) {
-    return `var edgeGuardInstalled=false;
-var edgeDiagnostics={reasserts_count:0,revert_loops_detected:0,first_revert_ms:null};`;
-  }
-  return `var preApplied=${JSON.stringify(preApplied).replace(/</g, "\\u003c")};
-var edgeGuardInstalled=false;
-var edgeDiagnostics={reasserts_count:0,revert_loops_detected:0,first_revert_ms:null};
-(function(){
-var seen=new Set(),handedOff=false,stopped=false,pending=false,last=-Infinity,consecutive=0,observer,timer,landing=location.href;
-function stop(){if(stopped)return;stopped=true;if(observer)observer.disconnect();clearTimeout(timer);document.removeEventListener('DOMContentLoaded',ready);emitEdgePerf();}
-window.__dripEdgeGuardHandoff=function(){handedOff=true;emitEdgePerf();if(!preApplied.some(function(m){return m.a==='remove';}))stop();return edgeDiagnostics;};
-function remember(el){var keys=el.getAttribute('data-drip-edge-applied');if(keys)keys.split(/\\s+/).forEach(function(key){if(key)seen.add(key);});}
-function scan(root){if(!root)return;if(root.nodeType!==1&&root.nodeType!==9)return;if(root.getAttribute)remember(root);Array.prototype.forEach.call(root.querySelectorAll('[data-drip-edge-applied]'),remember);}
-function ready(){scan(document);schedule();}
-function targets(m){try{return Array.prototype.slice.call(document.querySelectorAll(m.s));}catch(e){return [];}}
-function relevant(records){return preApplied.some(function(m){var nodes=targets(m);try{return records.some(function(r){var n=r.target.nodeType===1?r.target:r.target.parentElement;return nodes.some(function(el){return n&&(n===el||n===el.parentElement||n.contains(el)||el.contains(n));})||Array.prototype.some.call(r.addedNodes,function(n){return n.nodeType===1&&(n.matches(m.s)||n.querySelector(m.s));});});}catch(e){return false;}});}
-function repair(){pending=false;if(stopped||!document.body)return;var changed=false;
-if(handedOff&&location.href!==landing){stop();return;}
-preApplied.forEach(function(m){if(m.a!=='remove'&&(handedOff||!seen.has(m.e+':'+m.i)))return;targets(m).forEach(function(el){
-if(m.a==='text'||m.a==='setText'){if(el.textContent!==m.t){el.textContent=m.t;changed=true;}}
-else if(m.a==='html'){var template=document.createElement('template');template.innerHTML=m.h;if(el.innerHTML!==template.innerHTML){el.innerHTML=template.innerHTML;changed=true;}}
-else if(m.a==='attribute'){Object.keys(m.at||{}).forEach(function(k){var v=m.at[k];if(el.getAttribute(k)!==v){if(v===null)el.removeAttribute(k);else el.setAttribute(k,v);changed=true;}});}
-else if(m.a==='style'||m.a==='setStyle'){Object.keys(m.st||{}).forEach(function(k){var probe=document.createElement('span');probe.setAttribute('style',k+':'+m.st[k]);var v=probe.style.getPropertyValue(k),priority=probe.style.getPropertyPriority(k);if(el.style.getPropertyValue(k)!==v||el.style.getPropertyPriority(k)!==priority){el.style.setProperty(k,v,priority);changed=true;}});}
-else if(m.a==='remove'){el.remove();changed=true;}
-else if(m.k&&el.parentElement){var exists=Array.prototype.some.call(el.parentElement.children,function(n){return n.getAttribute('data-drip-inserted')===m.k;});if(!exists){el.insertAdjacentHTML(m.a==='insertBefore'?'beforebegin':'afterend',m.h);changed=true;}}
-});});
-if(observer)observer.takeRecords();if(!changed)return;
-var now=performance.now();if(edgeDiagnostics.first_revert_ms===null)edgeDiagnostics.first_revert_ms=now;
-edgeDiagnostics.reasserts_count++;consecutive=now-last<${CONSECUTIVE_FRAME_MS}?consecutive+1:1;last=now;
-if(edgeDiagnostics.reasserts_count>=${DEFAULT_CAP}||consecutive>=${LOOP_FRAME_LIMIT}){edgeDiagnostics.revert_loops_detected++;stop();}}
-function schedule(){if(stopped||pending)return;pending=true;Promise.resolve().then(repair);}
-if(typeof MutationObserver==='function'&&document.documentElement){edgeGuardInstalled=true;scan(document);observer=new MutationObserver(function(records){scan(document);records.forEach(function(r){Array.prototype.forEach.call(r.removedNodes,scan);});if(relevant(records))schedule();});observer.observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true});timer=setTimeout(stop,${GUARD_TIMEOUT_MS});document.addEventListener('DOMContentLoaded',ready,{once:true});}
-})();`;
-}
-
-// ../shared-runtime/src/experiment-servability.ts
-function isExperimentServable(experiment, context) {
-  if (!experiment || experiment.runtime_disabled === true) return false;
-  const environment = context.environment.trim().toLowerCase() || "production";
-  const experimentEnvironment = experiment.environment_key?.trim().toLowerCase();
-  if (experimentEnvironment && experimentEnvironment !== environment) return false;
-  if (experiment.status === "running") return true;
-  return context.qaMode === true && (experiment.status === "qa" || experiment.status === "draft" || experiment.status === "awaiting_client_approval" || experiment.status === "changes_requested" || experiment.status === "client_approved" || experiment.status === "ready_to_launch" || experiment.status === "paused" || experiment.status === "completed");
-}
 
 // ../shared-runtime/src/targeting-core.ts
 function isRegexOuterQuantifierStart(pattern, index) {
@@ -335,6 +282,118 @@ function matchSegmentConditionValues(condition, actual, expected = condition.val
     default:
       return false;
   }
+}
+
+// ../shared-runtime/src/worker-targeting.ts
+var EDGE_SEGMENT_CONDITION_OPERATORS = /* @__PURE__ */ new Set([
+  "equals",
+  "contains",
+  "matches_wildcard",
+  "matches_regex"
+]);
+function edgeSegmentConditionOperatorIsSupported(operator, device = false) {
+  return typeof operator === "string" && (device ? operator === "equals" || operator === "not_equals" : EDGE_SEGMENT_CONDITION_OPERATORS.has(operator));
+}
+function edgeUrlRuleRequiresClientEvaluation(rule) {
+  return Boolean(
+    rule && typeof rule === "object" && typeof rule.pattern === "string" && rule.pattern && urlRuleRequiresClientEvaluation(rule)
+  );
+}
+function edgeUrlRulesRequireClientEvaluation(rules) {
+  return Array.isArray(rules) && rules.some(edgeUrlRuleRequiresClientEvaluation);
+}
+function edgeSegmentConditionRequiresClientEvaluation(condition) {
+  if (!condition || typeof condition !== "object") return false;
+  const expected = condition.signal === "url.query" ? resolveUrlQueryConditionOperands(condition, "").expected : condition.value;
+  return segmentConditionRequiresClientEvaluation(condition, expected);
+}
+function edgeSegmentRuleConditions(rule) {
+  const groups = Array.isArray(rule?.rules?.groups) ? rule.rules.groups.filter((group) => Array.isArray(group) && group.length > 0) : [];
+  if (groups.length) return groups.flat();
+  return Array.isArray(rule?.rules?.conditions) ? rule.rules.conditions : [];
+}
+function edgeSegmentRulesAreUrlOnly(rules, options = {}) {
+  return rules.every((rule) => {
+    const groupedConditions = Array.isArray(rule.rules?.groups) ? rule.rules.groups.flat() : [];
+    const conditions = groupedConditions.length ? groupedConditions : Array.isArray(rule.rules?.conditions) ? rule.rules.conditions : [];
+    if (!conditions.length) return false;
+    return conditions.every(
+      (condition) => condition.js == null && edgeSegmentConditionOperatorIsSupported(condition.operator, options.chargePlane && condition.signal === "device.type") && !edgeSegmentConditionRequiresClientEvaluation(condition) && (condition.signal === "url.full" || condition.signal === "url.path" || condition.signal === "url.query" || condition.signal === "geo.country" || options.chargePlane === true && condition.signal === "device.type")
+    );
+  });
+}
+function edgeAudienceTargetingIsWorkerReproducible(targeting, options = {}) {
+  if (targeting.deviceType != null && targeting.deviceType !== "all" && !(options.chargePlane && ["desktop", "mobile", "tablet"].includes(targeting.deviceType))) return false;
+  if (Array.isArray(targeting.attributes) && targeting.attributes.length > 0) return false;
+  if (Array.isArray(targeting.segments) && targeting.segments.length > 0) {
+    const expandedSegmentRules = Array.isArray(targeting.segmentRules) ? targeting.segmentRules : [];
+    if (!targeting.segments.every(
+      (segment) => typeof segment.id === "string" && expandedSegmentRules.some((rule) => rule.id === segment.id)
+    )) return false;
+  }
+  if (Array.isArray(targeting.segmentRules) && !edgeSegmentRulesAreUrlOnly(targeting.segmentRules, options)) return false;
+  return true;
+}
+function edgeUrlTargetingIsWorkerReproducible(targeting) {
+  return !edgeUrlRulesRequireClientEvaluation(targeting.url) && (!Array.isArray(targeting.pageRules) || targeting.pageRules.every(edgePageRuleIsUrlDriven));
+}
+function edgePageRuleIsUrlDriven(rule) {
+  if (!rule || typeof rule !== "object") return false;
+  const mode = rule.trigger?.mode;
+  return !rule.advancedCondition?.code?.trim() && !rule.trigger?.triggerJs?.trim() && mode !== "manual-callback" && mode !== "manual-api" && !edgeUrlRulesRequireClientEvaluation(rule.includeRules) && !edgeUrlRulesRequireClientEvaluation(rule.excludeRules);
+}
+
+// ../edge-engine/src/edge-guard-constants.ts
+var DEFAULT_CAP = 24;
+var LOOP_FRAME_LIMIT = 6;
+var CONSECUTIVE_FRAME_MS = 34;
+var GUARD_TIMEOUT_MS = 8e3;
+
+// ../edge-engine/src/edge-guard.ts
+function buildEdgeGuard(preApplied) {
+  if (preApplied.length === 0) {
+    return `var edgeGuardInstalled=false;
+var edgeDiagnostics={reasserts_count:0,revert_loops_detected:0,first_revert_ms:null};`;
+  }
+  return `var preApplied=${JSON.stringify(preApplied).replace(/</g, "\\u003c")};
+var edgeGuardInstalled=false;
+var edgeDiagnostics={reasserts_count:0,revert_loops_detected:0,first_revert_ms:null};
+(function(){
+var seen=new Set(),handedOff=false,stopped=false,pending=false,last=-Infinity,consecutive=0,observer,timer,landing=location.href;
+function stop(){if(stopped)return;stopped=true;if(observer)observer.disconnect();clearTimeout(timer);document.removeEventListener('DOMContentLoaded',ready);emitEdgePerf();}
+window.__dripEdgeGuardHandoff=function(){handedOff=true;emitEdgePerf();if(!preApplied.some(function(m){return m.a==='remove';}))stop();return edgeDiagnostics;};
+function remember(el){var keys=el.getAttribute('data-drip-edge-applied');if(keys)keys.split(/\\s+/).forEach(function(key){if(key)seen.add(key);});}
+function scan(root){if(!root)return;if(root.nodeType!==1&&root.nodeType!==9)return;if(root.getAttribute)remember(root);Array.prototype.forEach.call(root.querySelectorAll('[data-drip-edge-applied]'),remember);}
+function ready(){scan(document);schedule();}
+function targets(m){try{return Array.prototype.slice.call(document.querySelectorAll(m.s));}catch(e){return [];}}
+function relevant(records){return preApplied.some(function(m){var nodes=targets(m);try{return records.some(function(r){var n=r.target.nodeType===1?r.target:r.target.parentElement;return nodes.some(function(el){return n&&(n===el||n===el.parentElement||n.contains(el)||el.contains(n));})||Array.prototype.some.call(r.addedNodes,function(n){return n.nodeType===1&&(n.matches(m.s)||n.querySelector(m.s));});});}catch(e){return false;}});}
+function repair(){pending=false;if(stopped||!document.body)return;var changed=false;
+if(handedOff&&location.href!==landing){stop();return;}
+preApplied.forEach(function(m){if(m.a!=='remove'&&(handedOff||!seen.has(m.e+':'+m.i)))return;targets(m).forEach(function(el){
+if(m.a==='text'||m.a==='setText'){if(el.textContent!==m.t){el.textContent=m.t;changed=true;}}
+else if(m.a==='html'){var template=document.createElement('template');template.innerHTML=m.h;if(el.innerHTML!==template.innerHTML){el.innerHTML=template.innerHTML;changed=true;}}
+else if(m.a==='attribute'){Object.keys(m.at||{}).forEach(function(k){var v=m.at[k];if(el.getAttribute(k)!==v){if(v===null)el.removeAttribute(k);else el.setAttribute(k,v);changed=true;}});}
+else if(m.a==='style'||m.a==='setStyle'){Object.keys(m.st||{}).forEach(function(k){var probe=document.createElement('span');probe.setAttribute('style',k+':'+m.st[k]);var v=probe.style.getPropertyValue(k),priority=probe.style.getPropertyPriority(k);if(el.style.getPropertyValue(k)!==v||el.style.getPropertyPriority(k)!==priority){el.style.setProperty(k,v,priority);changed=true;}});}
+else if(m.a==='remove'){el.remove();changed=true;}
+else if(m.k&&el.parentElement){var exists=Array.prototype.some.call(el.parentElement.children,function(n){return n.getAttribute('data-drip-inserted')===m.k;});if(!exists){el.insertAdjacentHTML(m.a==='insertBefore'?'beforebegin':'afterend',m.h);changed=true;}}
+});});
+if(observer)observer.takeRecords();if(!changed)return;
+var now=performance.now();if(edgeDiagnostics.first_revert_ms===null)edgeDiagnostics.first_revert_ms=now;
+edgeDiagnostics.reasserts_count++;consecutive=now-last<${CONSECUTIVE_FRAME_MS}?consecutive+1:1;last=now;
+if(edgeDiagnostics.reasserts_count>=${DEFAULT_CAP}||consecutive>=${LOOP_FRAME_LIMIT}){edgeDiagnostics.revert_loops_detected++;stop();}}
+function schedule(){if(stopped||pending)return;pending=true;Promise.resolve().then(repair);}
+if(typeof MutationObserver==='function'&&document.documentElement){edgeGuardInstalled=true;scan(document);observer=new MutationObserver(function(records){scan(document);records.forEach(function(r){Array.prototype.forEach.call(r.removedNodes,scan);});if(relevant(records))schedule();});observer.observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true});timer=setTimeout(stop,${GUARD_TIMEOUT_MS});document.addEventListener('DOMContentLoaded',ready,{once:true});}
+})();`;
+}
+
+// ../shared-runtime/src/experiment-servability.ts
+function isExperimentServable(experiment, context) {
+  if (!experiment || experiment.runtime_disabled === true) return false;
+  const environment = context.environment.trim().toLowerCase() || "production";
+  const experimentEnvironment = experiment.environment_key?.trim().toLowerCase();
+  if (experimentEnvironment && experimentEnvironment !== environment) return false;
+  if (experiment.status === "running") return true;
+  return context.qaMode === true && (experiment.status === "qa" || experiment.status === "draft" || experiment.status === "awaiting_client_approval" || experiment.status === "changes_requested" || experiment.status === "client_approved" || experiment.status === "ready_to_launch" || experiment.status === "paused" || experiment.status === "completed");
 }
 
 // ../shared-runtime/src/currency.ts
@@ -649,13 +708,13 @@ function evalUrlRule(url, rule) {
   if (!rule || typeof rule.pattern !== "string" || !rule.pattern) return false;
   return evaluateUrlRuleDetailed(url, rule, { executeUnsafePatterns: false }).matched;
 }
-function edgeUrlRuleRequiresClientEvaluation(rule) {
+function edgeUrlRuleRequiresClientEvaluation2(rule) {
   return Boolean(
     rule && typeof rule === "object" && typeof rule.pattern === "string" && rule.pattern && urlRuleRequiresClientEvaluation(rule)
   );
 }
-function edgeUrlRulesRequireClientEvaluation(rules) {
-  return Array.isArray(rules) && rules.some(edgeUrlRuleRequiresClientEvaluation);
+function edgeUrlRulesRequireClientEvaluation2(rules) {
+  return Array.isArray(rules) && rules.some(edgeUrlRuleRequiresClientEvaluation2);
 }
 function matchUrlRules(url, rules) {
   if (!rules.length) return true;
@@ -695,16 +754,7 @@ function matchEdgePageRules(url, rules, mode) {
   }
   return !hasInclude || (mode === "all" ? allIncludedMatched : included);
 }
-var EDGE_SEGMENT_CONDITION_OPERATORS = /* @__PURE__ */ new Set([
-  "equals",
-  "contains",
-  "matches_wildcard",
-  "matches_regex"
-]);
-function edgeSegmentConditionOperatorIsSupported(operator) {
-  return typeof operator === "string" && EDGE_SEGMENT_CONDITION_OPERATORS.has(operator);
-}
-function edgeSegmentConditionOperands(url, country, condition) {
+function edgeSegmentConditionOperands(url, context, condition) {
   let parsed;
   try {
     parsed = new URL(url, "https://_");
@@ -716,19 +766,15 @@ function edgeSegmentConditionOperands(url, country, condition) {
   if (condition.signal === "url.query") {
     return resolveUrlQueryConditionOperands(condition, stripQaParams(parsed.search));
   }
-  if (condition.signal === "geo.country") return { actual: country || void 0, expected: condition.value };
+  if (condition.signal === "geo.country") return { actual: context.country || void 0, expected: condition.value };
+  if (condition.signal === "device.type" && context.device) return { actual: context.device, expected: condition.value };
   return null;
 }
-function edgeSegmentConditionRequiresClientEvaluation(condition) {
+function matchEdgeSegmentCondition(url, context, condition) {
   if (!condition || typeof condition !== "object") return false;
-  const expected = condition.signal === "url.query" ? resolveUrlQueryConditionOperands(condition, "").expected : condition.value;
-  return segmentConditionRequiresClientEvaluation(condition, expected);
-}
-function matchEdgeSegmentCondition(url, country, condition) {
-  if (!condition || typeof condition !== "object") return false;
-  if (!edgeSegmentConditionOperatorIsSupported(condition.operator)) return false;
+  if (!edgeSegmentConditionOperatorIsSupported(condition.operator, condition.signal === "device.type")) return false;
   if (edgeSegmentConditionRequiresClientEvaluation(condition)) return false;
-  const operands = edgeSegmentConditionOperands(url, country, condition);
+  const operands = edgeSegmentConditionOperands(url, context, condition);
   if (!operands) return false;
   return matchSegmentConditionValues(
     condition,
@@ -736,25 +782,26 @@ function matchEdgeSegmentCondition(url, country, condition) {
     operands.expected
   );
 }
-function matchEdgeSegmentRule(url, country, rule) {
+function matchEdgeSegmentRule(url, context, rule) {
   const groups = Array.isArray(rule.rules?.groups) ? rule.rules.groups.filter((group) => Array.isArray(group) && group.length > 0) : [];
   if (groups.length) {
     return groups.every(
-      (group) => group.some((condition) => matchEdgeSegmentCondition(url, country, condition))
+      (group) => group.some((condition) => matchEdgeSegmentCondition(url, context, condition))
     );
   }
   const conditions = Array.isArray(rule.rules?.conditions) ? rule.rules.conditions : [];
   if (!conditions.length) return false;
   const operator = rule.rules?.operator === "or" ? "or" : "and";
-  return operator === "or" ? conditions.some((condition) => matchEdgeSegmentCondition(url, country, condition)) : conditions.every((condition) => matchEdgeSegmentCondition(url, country, condition));
+  return operator === "or" ? conditions.some((condition) => matchEdgeSegmentCondition(url, context, condition)) : conditions.every((condition) => matchEdgeSegmentCondition(url, context, condition));
 }
-function matchEdgeSegmentRules(url, country, rules, mode) {
+function matchEdgeSegmentRules(url, visitor, rules, mode) {
   if (!rules.length) return true;
+  const context = typeof visitor === "string" ? { country: visitor } : visitor ?? {};
   let hasInclude = false;
   let included = false;
   let allIncludedMatched = true;
   for (const rule of rules) {
-    const matched = matchEdgeSegmentRule(url, country, rule);
+    const matched = matchEdgeSegmentRule(url, context, rule);
     if (rule.include === false) {
       if (matched) return false;
     } else {
@@ -765,41 +812,16 @@ function matchEdgeSegmentRules(url, country, rules, mode) {
   }
   return !hasInclude || (mode === "all" ? allIncludedMatched : included);
 }
-function edgeSegmentRulesAreUrlOnly(rules) {
-  return rules.every((rule) => {
-    const groupedConditions = Array.isArray(rule.rules?.groups) ? rule.rules.groups.flat() : [];
-    const conditions = groupedConditions.length ? groupedConditions : Array.isArray(rule.rules?.conditions) ? rule.rules.conditions : [];
-    if (!conditions.length) return false;
-    return conditions.every(
-      (condition) => condition.js == null && edgeSegmentConditionOperatorIsSupported(condition.operator) && !edgeSegmentConditionRequiresClientEvaluation(condition) && (condition.signal === "url.full" || condition.signal === "url.path" || condition.signal === "url.query" || condition.signal === "geo.country")
-    );
-  });
-}
-function edgeAudienceTargetingIsWorkerReproducible(targeting) {
-  if (targeting.deviceType != null && targeting.deviceType !== "all") return false;
-  if (Array.isArray(targeting.attributes) && targeting.attributes.length > 0) return false;
-  if (Array.isArray(targeting.segments) && targeting.segments.length > 0) {
-    const expandedSegmentRules = Array.isArray(targeting.segmentRules) ? targeting.segmentRules : [];
-    if (!targeting.segments.every(
-      (segment) => typeof segment.id === "string" && expandedSegmentRules.some((rule) => rule.id === segment.id)
-    )) return false;
-  }
-  if (Array.isArray(targeting.segmentRules) && !edgeSegmentRulesAreUrlOnly(targeting.segmentRules)) return false;
-  return true;
-}
-function edgeUrlTargetingIsWorkerReproducible(targeting) {
-  return !edgeUrlRulesRequireClientEvaluation(targeting.url) && (!Array.isArray(targeting.pageRules) || targeting.pageRules.every(edgePageRuleIsUrlDriven));
-}
-function edgePageRuleIsUrlDriven(rule) {
-  if (!rule || typeof rule !== "object") return false;
-  const mode = rule.trigger?.mode;
-  return !rule.advancedCondition?.code?.trim() && !rule.trigger?.triggerJs?.trim() && mode !== "manual-callback" && mode !== "manual-api" && !edgeUrlRulesRequireClientEvaluation(rule.includeRules) && !edgeUrlRulesRequireClientEvaluation(rule.excludeRules);
-}
-function matchesEdgeAudienceTargeting(targeting, url, country) {
+function matchesEdgeAudienceTargeting(targeting, url, visitor, options = {}) {
   if (!targeting) return true;
-  if (!edgeAudienceTargetingIsWorkerReproducible(targeting)) return false;
+  if (!edgeAudienceTargetingIsWorkerReproducible(targeting, options)) return false;
+  const context = typeof visitor === "string" ? { country: visitor } : visitor ?? {};
+  if (targeting.deviceType && targeting.deviceType !== "all" && context.device !== targeting.deviceType) return false;
+  if (!context.device && Array.isArray(targeting.segmentRules) && targeting.segmentRules.some(
+    (rule) => edgeSegmentRuleConditions(rule).some((condition) => condition.signal === "device.type")
+  )) return false;
   if (Array.isArray(targeting.segmentRules)) {
-    if (!matchEdgeSegmentRules(url, country, targeting.segmentRules, targeting.segmentMatchMode)) return false;
+    if (!matchEdgeSegmentRules(url, context, targeting.segmentRules, targeting.segmentMatchMode)) return false;
   }
   return true;
 }
@@ -955,7 +977,7 @@ function resolveEdgeExclusionGroups(assignments, groups, visitorId, forcedExperi
     (assignment) => assignment.attributableOnly === true || !suppressed.has(assignment.experimentId)
   );
 }
-function evaluateEdgeAssignments(experiments, url, visitorId, exclusionGroups, stickyExclusionSelections, parsedForceMap, holdoutConfig, qaMode = false, country, now = /* @__PURE__ */ new Date()) {
+function evaluateEdgeAssignments(experiments, url, visitorId, exclusionGroups, stickyExclusionSelections, parsedForceMap, holdoutConfig, qaMode = false, country, now = /* @__PURE__ */ new Date(), options = {}) {
   const forceMap = resolveForceMap(
     parsedForceMap ?? parseForceMapFromUrl(url),
     experiments
@@ -976,7 +998,8 @@ function evaluateEdgeAssignments(experiments, url, visitorId, exclusionGroups, s
     const audienceTargetingMatches = matchesEdgeAudienceTargeting(
       experiment.targeting,
       url,
-      country
+      { ...options.visitor, country: options.visitor?.country ?? country },
+      { chargePlane: options.chargePlaneExperimentIds?.has(experiment.id) }
     );
     const urlTargetingReproducible = !experiment.targeting || edgeUrlTargetingIsWorkerReproducible(experiment.targeting);
     const treatmentUrlMatches = matchesEdgeUrlTargeting(experiment.targeting, url);
@@ -1002,7 +1025,7 @@ function evaluateEdgeAssignments(experiments, url, visitorId, exclusionGroups, s
     if (!variation?.id) continue;
     const urlBlocks = !variation.isControl && Array.isArray(variation.urlBlocks) ? variation.urlBlocks : [];
     const urlBlocksRequireClient = urlBlocks.some(
-      (block) => edgeUrlRulesRequireClientEvaluation(block?.urlRules)
+      (block) => edgeUrlRulesRequireClientEvaluation2(block?.urlRules)
     );
     const activeUrlBlock = urlBlocksRequireClient ? void 0 : urlBlocks.find(
       (block) => Array.isArray(block?.urlRules) && matchUrlRules(url, block.urlRules)
@@ -1794,7 +1817,7 @@ function classifyRequest(request) {
 }
 
 // src/version.ts
-var EDGE_WORKER_VERSION = "1.2.10";
+var EDGE_WORKER_VERSION = "1.2.11";
 var MINIMUM_COMPATIBLE_ENGINE_VERSION_FIELD = "minimumEdgeEngineVersion";
 function parseVersion(value) {
   const match = value.trim().match(
