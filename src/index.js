@@ -1,8 +1,62 @@
-// Apex Edge Worker v1.2.12 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
+// Apex Edge Worker v1.2.13 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
 // src/limits.ts
 var DEFAULT_ORIGIN_FETCH_TIMEOUT_MS = 5e3;
 var DEFAULT_MAX_MUTATION_BYTES = 256 * 1024;
 var DEFAULT_MAX_CONFIG_BYTES = 2 * 1024 * 1024;
+
+// ../shared-runtime/src/force-map.ts
+function parseForceString(value) {
+  if (isHeldForce(value.trim())) return {};
+  let map = null;
+  for (const pair of value.split(",")) {
+    const [rawExperimentId, rawVariationId] = pair.split(":");
+    const experimentId = rawExperimentId?.trim();
+    const variationId = rawVariationId?.trim();
+    if (experimentId && variationId) (map ??= {})[experimentId] = variationId;
+  }
+  return map;
+}
+function resolveForceMap(map, experiments) {
+  const resolved = {};
+  for (const [experimentHandle, variationHandle] of Object.entries(map ?? {})) {
+    const experiment = experiments?.find(
+      (candidate) => Boolean(candidate?.id) && Array.isArray(candidate.variations) && (candidate.id === experimentHandle || candidate.publicId === experimentHandle)
+    );
+    resolved[experiment ? experiment.id : experimentHandle] = experiment && !isHeldForce(variationHandle) ? experiment.variations.find(
+      (candidate) => candidate.id === variationHandle || candidate.publicId === variationHandle
+    )?.id ?? variationHandle : variationHandle;
+  }
+  return Object.keys(resolved).length > 0 ? resolved : null;
+}
+var QA_URL_PARAMS = [
+  "drip_qa",
+  "drip_force",
+  "drip_force_coexist",
+  "drip_experiment_id",
+  "drip_experiment",
+  "drip_variation_id",
+  "drip_variation",
+  "drip_qa_session",
+  "drip_harness",
+  "drip_debug",
+  "drip_devtools",
+  "drip_screenshot",
+  "apex_debug",
+  "apex_force"
+];
+function stripQaParams(search) {
+  const raw = search.replace(/^\?/, "");
+  if (!raw) return "";
+  const kept = raw.split("&").filter((segment) => !QA_URL_PARAMS.includes(segment.split("=")[0]));
+  return kept.length ? "?" + kept.join("&") : "";
+}
+var FORCE_HELD = "~";
+function isHeldForce(variation) {
+  return variation === FORCE_HELD;
+}
+function pinnedForceIds(map) {
+  return Object.keys(map ?? {}).filter((id) => !isHeldForce(map[id]));
+}
 
 // ../shared-runtime/src/targeting-core.ts
 function isRegexOuterQuantifierStart(pattern, index) {
@@ -349,6 +403,80 @@ function edgePageRuleIsUrlDriven(rule) {
   const mode = rule.trigger?.mode;
   return !rule.advancedCondition?.code?.trim() && !rule.trigger?.triggerJs?.trim() && mode !== "manual-callback" && mode !== "manual-api" && !edgeUrlRulesRequireClientEvaluation(rule.includeRules) && !edgeUrlRulesRequireClientEvaluation(rule.excludeRules);
 }
+function edgeSegmentConditionOperands(url, context, condition) {
+  let parsed;
+  try {
+    parsed = new URL(url, "https://_");
+  } catch {
+    return null;
+  }
+  if (condition.signal === "url.full") return { actual: parsed.href, expected: condition.value };
+  if (condition.signal === "url.path") return { actual: parsed.pathname, expected: condition.value };
+  if (condition.signal === "url.query") {
+    return resolveUrlQueryConditionOperands(condition, stripQaParams(parsed.search));
+  }
+  if (condition.signal === "geo.country") return { actual: context.country || void 0, expected: condition.value };
+  if (condition.signal === "device.type" && context.device) return { actual: context.device, expected: condition.value };
+  return null;
+}
+function matchEdgeSegmentCondition(url, context, condition) {
+  if (!condition || typeof condition !== "object") return false;
+  if (!edgeSegmentConditionOperatorIsSupported(condition.operator, condition.signal === "device.type")) return false;
+  if (edgeSegmentConditionRequiresClientEvaluation(condition)) return false;
+  const operands = edgeSegmentConditionOperands(url, context, condition);
+  if (!operands) return false;
+  return matchSegmentConditionValues(
+    condition,
+    operands.actual,
+    operands.expected
+  );
+}
+function matchEdgeSegmentRule(url, context, rule) {
+  const groups = Array.isArray(rule.rules?.groups) ? rule.rules.groups.filter((group) => Array.isArray(group) && group.length > 0) : [];
+  if (groups.length) {
+    return groups.every(
+      (group) => group.some((condition) => matchEdgeSegmentCondition(url, context, condition))
+    );
+  }
+  const conditions = Array.isArray(rule.rules?.conditions) ? rule.rules.conditions : [];
+  if (!conditions.length) return false;
+  const operator = rule.rules?.operator === "or" ? "or" : "and";
+  return operator === "or" ? conditions.some((condition) => matchEdgeSegmentCondition(url, context, condition)) : conditions.every((condition) => matchEdgeSegmentCondition(url, context, condition));
+}
+function matchEdgeSegmentRules(url, visitor, rules, mode) {
+  if (!rules.length) return true;
+  const context = typeof visitor === "string" ? { country: visitor } : visitor ?? {};
+  let hasInclude = false;
+  let included = false;
+  let allIncludedMatched = true;
+  for (const rule of rules) {
+    const matched = matchEdgeSegmentRule(url, context, rule);
+    if (rule.include === false) {
+      if (matched) return false;
+    } else {
+      hasInclude = true;
+      if (matched) included = true;
+      else allIncludedMatched = false;
+    }
+  }
+  return !hasInclude || (mode === "all" ? allIncludedMatched : included);
+}
+function matchesEdgeAudienceTargeting(targeting, url, visitor, options = {}) {
+  if (!targeting) return true;
+  if (!edgeAudienceTargetingIsWorkerReproducible(targeting, options)) return false;
+  const context = typeof visitor === "string" ? { country: visitor } : visitor ?? {};
+  if (targeting.deviceType && targeting.deviceType !== "all" && context.device !== targeting.deviceType) return false;
+  const deviceAttributes = options.chargePlane && Array.isArray(targeting.attributes) ? targeting.attributes.filter(edgeDeviceAttributeRule) : [];
+  const hasDeviceRules = deviceAttributes.length > 0 || Array.isArray(targeting.segmentRules) && targeting.segmentRules.some(
+    (rule) => edgeSegmentRuleConditions(rule).some((condition) => condition.signal === "device.type")
+  );
+  if (hasDeviceRules && !["desktop", "mobile", "tablet"].includes(context.device ?? "")) return false;
+  if (!deviceAttributes.every((rule) => matchSegmentConditionValues(rule, context.device))) return false;
+  if (Array.isArray(targeting.segmentRules)) {
+    if (!matchEdgeSegmentRules(url, context, targeting.segmentRules, targeting.segmentMatchMode)) return false;
+  }
+  return true;
+}
 
 // ../edge-engine/src/edge-guard-constants.ts
 var DEFAULT_CAP = 24;
@@ -471,60 +599,6 @@ function chooseVariation(hashValue, weights) {
     if (n < acc) return i;
   }
   return weights.length - 1;
-}
-
-// ../shared-runtime/src/force-map.ts
-function parseForceString(value) {
-  if (isHeldForce(value.trim())) return {};
-  let map = null;
-  for (const pair of value.split(",")) {
-    const [rawExperimentId, rawVariationId] = pair.split(":");
-    const experimentId = rawExperimentId?.trim();
-    const variationId = rawVariationId?.trim();
-    if (experimentId && variationId) (map ??= {})[experimentId] = variationId;
-  }
-  return map;
-}
-function resolveForceMap(map, experiments) {
-  const resolved = {};
-  for (const [experimentHandle, variationHandle] of Object.entries(map ?? {})) {
-    const experiment = experiments?.find(
-      (candidate) => Boolean(candidate?.id) && Array.isArray(candidate.variations) && (candidate.id === experimentHandle || candidate.publicId === experimentHandle)
-    );
-    resolved[experiment ? experiment.id : experimentHandle] = experiment && !isHeldForce(variationHandle) ? experiment.variations.find(
-      (candidate) => candidate.id === variationHandle || candidate.publicId === variationHandle
-    )?.id ?? variationHandle : variationHandle;
-  }
-  return Object.keys(resolved).length > 0 ? resolved : null;
-}
-var QA_URL_PARAMS = [
-  "drip_qa",
-  "drip_force",
-  "drip_force_coexist",
-  "drip_experiment_id",
-  "drip_experiment",
-  "drip_variation_id",
-  "drip_variation",
-  "drip_qa_session",
-  "drip_harness",
-  "drip_debug",
-  "drip_devtools",
-  "drip_screenshot",
-  "apex_debug",
-  "apex_force"
-];
-function stripQaParams(search) {
-  const raw = search.replace(/^\?/, "");
-  if (!raw) return "";
-  const kept = raw.split("&").filter((segment) => !QA_URL_PARAMS.includes(segment.split("=")[0]));
-  return kept.length ? "?" + kept.join("&") : "";
-}
-var FORCE_HELD = "~";
-function isHeldForce(variation) {
-  return variation === FORCE_HELD;
-}
-function pinnedForceIds(map) {
-  return Object.keys(map ?? {}).filter((id) => !isHeldForce(map[id]));
 }
 
 // ../edge-engine/src/deps.ts
@@ -760,80 +834,6 @@ function matchEdgePageRules(url, rules, mode) {
     }
   }
   return !hasInclude || (mode === "all" ? allIncludedMatched : included);
-}
-function edgeSegmentConditionOperands(url, context, condition) {
-  let parsed;
-  try {
-    parsed = new URL(url, "https://_");
-  } catch {
-    return null;
-  }
-  if (condition.signal === "url.full") return { actual: parsed.href, expected: condition.value };
-  if (condition.signal === "url.path") return { actual: parsed.pathname, expected: condition.value };
-  if (condition.signal === "url.query") {
-    return resolveUrlQueryConditionOperands(condition, stripQaParams(parsed.search));
-  }
-  if (condition.signal === "geo.country") return { actual: context.country || void 0, expected: condition.value };
-  if (condition.signal === "device.type" && context.device) return { actual: context.device, expected: condition.value };
-  return null;
-}
-function matchEdgeSegmentCondition(url, context, condition) {
-  if (!condition || typeof condition !== "object") return false;
-  if (!edgeSegmentConditionOperatorIsSupported(condition.operator, condition.signal === "device.type")) return false;
-  if (edgeSegmentConditionRequiresClientEvaluation(condition)) return false;
-  const operands = edgeSegmentConditionOperands(url, context, condition);
-  if (!operands) return false;
-  return matchSegmentConditionValues(
-    condition,
-    operands.actual,
-    operands.expected
-  );
-}
-function matchEdgeSegmentRule(url, context, rule) {
-  const groups = Array.isArray(rule.rules?.groups) ? rule.rules.groups.filter((group) => Array.isArray(group) && group.length > 0) : [];
-  if (groups.length) {
-    return groups.every(
-      (group) => group.some((condition) => matchEdgeSegmentCondition(url, context, condition))
-    );
-  }
-  const conditions = Array.isArray(rule.rules?.conditions) ? rule.rules.conditions : [];
-  if (!conditions.length) return false;
-  const operator = rule.rules?.operator === "or" ? "or" : "and";
-  return operator === "or" ? conditions.some((condition) => matchEdgeSegmentCondition(url, context, condition)) : conditions.every((condition) => matchEdgeSegmentCondition(url, context, condition));
-}
-function matchEdgeSegmentRules(url, visitor, rules, mode) {
-  if (!rules.length) return true;
-  const context = typeof visitor === "string" ? { country: visitor } : visitor ?? {};
-  let hasInclude = false;
-  let included = false;
-  let allIncludedMatched = true;
-  for (const rule of rules) {
-    const matched = matchEdgeSegmentRule(url, context, rule);
-    if (rule.include === false) {
-      if (matched) return false;
-    } else {
-      hasInclude = true;
-      if (matched) included = true;
-      else allIncludedMatched = false;
-    }
-  }
-  return !hasInclude || (mode === "all" ? allIncludedMatched : included);
-}
-function matchesEdgeAudienceTargeting(targeting, url, visitor, options = {}) {
-  if (!targeting) return true;
-  if (!edgeAudienceTargetingIsWorkerReproducible(targeting, options)) return false;
-  const context = typeof visitor === "string" ? { country: visitor } : visitor ?? {};
-  if (targeting.deviceType && targeting.deviceType !== "all" && context.device !== targeting.deviceType) return false;
-  const deviceAttributes = options.chargePlane && Array.isArray(targeting.attributes) ? targeting.attributes.filter(edgeDeviceAttributeRule) : [];
-  const hasDeviceRules = deviceAttributes.length > 0 || Array.isArray(targeting.segmentRules) && targeting.segmentRules.some(
-    (rule) => edgeSegmentRuleConditions(rule).some((condition) => condition.signal === "device.type")
-  );
-  if (hasDeviceRules && !["desktop", "mobile", "tablet"].includes(context.device ?? "")) return false;
-  if (!deviceAttributes.every((rule) => matchSegmentConditionValues(rule, context.device))) return false;
-  if (Array.isArray(targeting.segmentRules)) {
-    if (!matchEdgeSegmentRules(url, context, targeting.segmentRules, targeting.segmentMatchMode)) return false;
-  }
-  return true;
 }
 function matchesEdgeUrlTargeting(targeting, url) {
   if (!targeting) return true;
@@ -1827,7 +1827,7 @@ function classifyRequest(request) {
 }
 
 // src/version.ts
-var EDGE_WORKER_VERSION = "1.2.12";
+var EDGE_WORKER_VERSION = "1.2.13";
 var MINIMUM_COMPATIBLE_ENGINE_VERSION_FIELD = "minimumEdgeEngineVersion";
 function parseVersion(value) {
   const match = value.trim().match(

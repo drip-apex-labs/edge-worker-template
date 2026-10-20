@@ -2,6 +2,11 @@
 
 Changes to the Apex Edge Worker, newest first, in Keep a Changelog format.
 
+## [1.2.13] - 2026-10-20
+
+### Changed
+- The audience matcher moved into the shared targeting module so the launch check can reuse it; behaviour unchanged. (#11241)
+
 ## [1.2.12] - 2026-10-20
 
 ### Fixed
