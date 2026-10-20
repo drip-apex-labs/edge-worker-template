@@ -2,6 +2,11 @@
 
 Changes to the Apex Edge Worker, newest first, in Keep a Changelog format.
 
+## [1.2.12] - 2026-10-20
+
+### Fixed
+- The shared targeting engine also treats stored device attribute rules (`device.type` equals, in, not in) as device rules for price and offer tests. The edge worker passes no device class, so its own assignments are unchanged. (#11241)
+
 ## [1.2.11] - 2026-10-19
 
 ### Changed

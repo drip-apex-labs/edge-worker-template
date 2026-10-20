@@ -1,4 +1,4 @@
-// Apex Edge Worker v1.2.11 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
+// Apex Edge Worker v1.2.12 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
 // src/limits.ts
 var DEFAULT_ORIGIN_FETCH_TIMEOUT_MS = 5e3;
 var DEFAULT_MAX_MUTATION_BYTES = 256 * 1024;
@@ -294,6 +294,13 @@ var EDGE_SEGMENT_CONDITION_OPERATORS = /* @__PURE__ */ new Set([
 function edgeSegmentConditionOperatorIsSupported(operator, device = false) {
   return typeof operator === "string" && (device ? operator === "equals" || operator === "not_equals" : EDGE_SEGMENT_CONDITION_OPERATORS.has(operator));
 }
+function edgeDeviceAttributeRule(rule) {
+  if (!rule || typeof rule !== "object") return false;
+  const { attribute, operator, value } = rule;
+  if (attribute !== "device.type") return false;
+  const isDevice = (entry) => entry === "desktop" || entry === "mobile" || entry === "tablet";
+  return operator === "equals" ? isDevice(value) : (operator === "in" || operator === "not_in") && Array.isArray(value) && value.length > 0 && value.every(isDevice);
+}
 function edgeUrlRuleRequiresClientEvaluation(rule) {
   return Boolean(
     rule && typeof rule === "object" && typeof rule.pattern === "string" && rule.pattern && urlRuleRequiresClientEvaluation(rule)
@@ -324,7 +331,7 @@ function edgeSegmentRulesAreUrlOnly(rules, options = {}) {
 }
 function edgeAudienceTargetingIsWorkerReproducible(targeting, options = {}) {
   if (targeting.deviceType != null && targeting.deviceType !== "all" && !(options.chargePlane && ["desktop", "mobile", "tablet"].includes(targeting.deviceType))) return false;
-  if (Array.isArray(targeting.attributes) && targeting.attributes.length > 0) return false;
+  if (Array.isArray(targeting.attributes) && targeting.attributes.length > 0 && !(options.chargePlane === true && targeting.attributes.every(edgeDeviceAttributeRule))) return false;
   if (Array.isArray(targeting.segments) && targeting.segments.length > 0) {
     const expandedSegmentRules = Array.isArray(targeting.segmentRules) ? targeting.segmentRules : [];
     if (!targeting.segments.every(
@@ -817,9 +824,12 @@ function matchesEdgeAudienceTargeting(targeting, url, visitor, options = {}) {
   if (!edgeAudienceTargetingIsWorkerReproducible(targeting, options)) return false;
   const context = typeof visitor === "string" ? { country: visitor } : visitor ?? {};
   if (targeting.deviceType && targeting.deviceType !== "all" && context.device !== targeting.deviceType) return false;
-  if (!context.device && Array.isArray(targeting.segmentRules) && targeting.segmentRules.some(
+  const deviceAttributes = options.chargePlane && Array.isArray(targeting.attributes) ? targeting.attributes.filter(edgeDeviceAttributeRule) : [];
+  const hasDeviceRules = deviceAttributes.length > 0 || Array.isArray(targeting.segmentRules) && targeting.segmentRules.some(
     (rule) => edgeSegmentRuleConditions(rule).some((condition) => condition.signal === "device.type")
-  )) return false;
+  );
+  if (hasDeviceRules && !["desktop", "mobile", "tablet"].includes(context.device ?? "")) return false;
+  if (!deviceAttributes.every((rule) => matchSegmentConditionValues(rule, context.device))) return false;
   if (Array.isArray(targeting.segmentRules)) {
     if (!matchEdgeSegmentRules(url, context, targeting.segmentRules, targeting.segmentMatchMode)) return false;
   }
@@ -1817,7 +1827,7 @@ function classifyRequest(request) {
 }
 
 // src/version.ts
-var EDGE_WORKER_VERSION = "1.2.11";
+var EDGE_WORKER_VERSION = "1.2.12";
 var MINIMUM_COMPATIBLE_ENGINE_VERSION_FIELD = "minimumEdgeEngineVersion";
 function parseVersion(value) {
   const match = value.trim().match(
