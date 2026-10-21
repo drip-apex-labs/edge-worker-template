@@ -2,6 +2,11 @@
 
 Changes to the Apex Edge Worker, newest first, in Keep a Changelog format.
 
+## [1.2.16] - 2026-10-21
+
+### Fixed
+- The custom code error budget stops a failing custom-code item after the configured number of errors per pageview. (#11386)
+
 ## [1.2.15] - 2026-10-21
 
 ### Changed
