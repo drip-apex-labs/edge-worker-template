@@ -2,6 +2,11 @@
 
 Changes to the Apex Edge Worker, newest first, in Keep a Changelog format.
 
+## [1.2.14] - 2026-10-20
+
+### Fixed
+- A customer screenshot preview stays silent after the first navigation: the persisted `drip_qa_screenshot` cookie keeps the forced variation but the injected runtime sends no analytics and no Shopify assignment sync. (#7445)
+
 ## [1.2.13] - 2026-10-20
 
 ### Changed
