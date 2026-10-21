@@ -1,4 +1,4 @@
-// Apex Edge Worker v1.2.14 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
+// Apex Edge Worker v1.2.15 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
 // src/limits.ts
 var DEFAULT_ORIGIN_FETCH_TIMEOUT_MS = 5e3;
 var DEFAULT_MAX_MUTATION_BYTES = 256 * 1024;
@@ -379,7 +379,7 @@ function edgeSegmentRulesAreUrlOnly(rules, options = {}) {
     const conditions = groupedConditions.length ? groupedConditions : Array.isArray(rule.rules?.conditions) ? rule.rules.conditions : [];
     if (!conditions.length) return false;
     return conditions.every(
-      (condition) => condition.js == null && edgeSegmentConditionOperatorIsSupported(condition.operator, options.chargePlane && condition.signal === "device.type") && !edgeSegmentConditionRequiresClientEvaluation(condition) && (condition.signal === "url.full" || condition.signal === "url.path" || condition.signal === "url.query" || condition.signal === "geo.country" || options.chargePlane === true && condition.signal === "device.type")
+      (condition) => condition.js == null && edgeSegmentConditionOperatorIsSupported(condition.operator, options.chargePlane && (condition.signal === "device.type" || condition.signal === "visitor.returning")) && !edgeSegmentConditionRequiresClientEvaluation(condition) && (condition.signal === "url.full" || condition.signal === "url.path" || condition.signal === "url.query" || condition.signal === "geo.country" || options.chargePlane === true && (condition.signal === "device.type" || condition.signal === "visitor.returning" && typeof condition.value === "boolean"))
     );
   });
 }
@@ -417,11 +417,12 @@ function edgeSegmentConditionOperands(url, context, condition) {
   }
   if (condition.signal === "geo.country") return { actual: context.country || void 0, expected: condition.value };
   if (condition.signal === "device.type" && context.device) return { actual: context.device, expected: condition.value };
+  if (condition.signal === "visitor.returning" && typeof context.visitorReturning === "boolean" && typeof condition.value === "boolean") return { actual: context.visitorReturning, expected: condition.value };
   return null;
 }
 function matchEdgeSegmentCondition(url, context, condition) {
   if (!condition || typeof condition !== "object") return false;
-  if (!edgeSegmentConditionOperatorIsSupported(condition.operator, condition.signal === "device.type")) return false;
+  if (!edgeSegmentConditionOperatorIsSupported(condition.operator, condition.signal === "device.type" || condition.signal === "visitor.returning")) return false;
   if (edgeSegmentConditionRequiresClientEvaluation(condition)) return false;
   const operands = edgeSegmentConditionOperands(url, context, condition);
   if (!operands) return false;
@@ -471,6 +472,8 @@ function matchesEdgeAudienceTargeting(targeting, url, visitor, options = {}) {
     (rule) => edgeSegmentRuleConditions(rule).some((condition) => condition.signal === "device.type")
   );
   if (hasDeviceRules && !["desktop", "mobile", "tablet"].includes(context.device ?? "")) return false;
+  const hasReturningRules = targeting.segmentRules?.some((rule) => edgeSegmentRuleConditions(rule).some((condition) => condition.signal === "visitor.returning"));
+  if (hasReturningRules && typeof context.visitorReturning !== "boolean") return false;
   if (!deviceAttributes.every((rule) => matchSegmentConditionValues(rule, context.device))) return false;
   if (Array.isArray(targeting.segmentRules)) {
     if (!matchEdgeSegmentRules(url, context, targeting.segmentRules, targeting.segmentMatchMode)) return false;
@@ -1850,7 +1853,7 @@ function classifyRequest(request) {
 }
 
 // src/version.ts
-var EDGE_WORKER_VERSION = "1.2.14";
+var EDGE_WORKER_VERSION = "1.2.15";
 var MINIMUM_COMPATIBLE_ENGINE_VERSION_FIELD = "minimumEdgeEngineVersion";
 function parseVersion(value) {
   const match = value.trim().match(

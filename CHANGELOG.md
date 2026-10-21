@@ -2,6 +2,11 @@
 
 Changes to the Apex Edge Worker, newest first, in Keep a Changelog format.
 
+## [1.2.15] - 2026-10-21
+
+### Changed
+- The shared targeting engine can evaluate new versus returning rules for price and offer tests from the value the Apex SDK reports. The edge worker passes no such value, so its own assignments are unchanged. (#10968)
+
 ## [1.2.14] - 2026-10-20
 
 ### Fixed
