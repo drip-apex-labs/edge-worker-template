@@ -1,24 +1,109 @@
-// Apex Edge Worker v1.2.16 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
+// Apex Edge Worker v1.2.17 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
 // src/limits.ts
 var DEFAULT_ORIGIN_FETCH_TIMEOUT_MS = 5e3;
 var DEFAULT_MAX_MUTATION_BYTES = 256 * 1024;
 var DEFAULT_MAX_CONFIG_BYTES = 2 * 1024 * 1024;
+
+// ../shared-runtime/src/ordered-rules.ts
+function orderedGroupKey(metadata) {
+  const rule = metadata?.orderedRule;
+  const legacy = metadata?.personalization;
+  return rule ? rule.flagId + "\0" + (rule.environmentKey ?? "") : legacy ? "personalization\0" + (legacy.id ?? legacy.key) : void 0;
+}
+function suppressOrderedAssignments(assignments, entry, attributionOnly = () => false, forces) {
+  const stopped = /* @__PURE__ */ new Set();
+  return assignments.filter((assignment) => {
+    const metadata = entry(assignment);
+    const rule = metadata?.orderedRule;
+    const legacy = metadata?.personalization;
+    const key = orderedGroupKey(metadata);
+    if (key && stopped.has(key)) return false;
+    const parentForced = rule && (forces?.[rule.flagId] || metadata?.featureFlag && forces?.[metadata.featureFlag.key]);
+    if (key && !attributionOnly(assignment) && (parentForced || (rule ?? legacy)?.stopAfterMatch !== false)) stopped.add(key);
+    return true;
+  });
+}
+function deferredOrderedEntries(entries, entry, unknown, exclusionGroups = [], forces = {}) {
+  const byId = /* @__PURE__ */ new Map();
+  const ordered = /* @__PURE__ */ new Map();
+  for (const item of entries) {
+    const metadata = entry(item);
+    if (metadata?.id) byId.set(metadata.id, item);
+    const key = orderedGroupKey(metadata);
+    if (key) ordered.set(key, [...ordered.get(key) ?? [], item]);
+  }
+  if (!ordered.size) return /* @__PURE__ */ new Set();
+  const connected = /* @__PURE__ */ new Map();
+  const dependents = /* @__PURE__ */ new Map();
+  const link = (map, from, to) => map.set(from, [...map.get(from) ?? [], to]);
+  const join = (a, b, exclusion) => {
+    link(connected, a, b);
+    link(connected, b, a);
+    link(dependents, a, b);
+    if (exclusion) link(dependents, b, a);
+  };
+  for (const members of ordered.values()) {
+    for (let i = 1; i < members.length; i++) join(members[i - 1], members[i], false);
+  }
+  for (const group of exclusionGroups) {
+    const members = group.members.map((member) => byId.get(member.experimentId)).filter((item) => item !== void 0);
+    for (let i = 1; i < members.length; i++) join(members[0], members[i], true);
+  }
+  const component = new Set([...ordered.values()].flat());
+  const componentQueue = [...component];
+  for (let i = 0; i < componentQueue.length; i++) {
+    for (const peer of connected.get(componentQueue[i]) ?? []) {
+      if (!component.has(peer)) {
+        component.add(peer);
+        componentQueue.push(peer);
+      }
+    }
+  }
+  const deferred = new Set(entries.filter((item) => component.has(item) && unknown(item, forces)));
+  const queue = [...deferred];
+  for (let i = 0; i < queue.length; i++) {
+    for (const peer of dependents.get(queue[i]) ?? []) {
+      if (!deferred.has(peer)) {
+        deferred.add(peer);
+        queue.push(peer);
+      }
+    }
+  }
+  return deferred;
+}
 
 // ../shared-runtime/src/force-map.ts
 function parseForceString(value) {
   if (isHeldForce(value.trim())) return {};
   let map = null;
   for (const pair of value.split(",")) {
-    const [rawExperimentId, rawVariationId] = pair.split(":");
+    const separator = pair.lastIndexOf(":");
+    const rawExperimentId = separator < 0 ? void 0 : pair.slice(0, separator);
+    const rawVariationId = separator < 0 ? void 0 : pair.slice(separator + 1);
     const experimentId = rawExperimentId?.trim();
     const variationId = rawVariationId?.trim();
     if (experimentId && variationId) (map ??= {})[experimentId] = variationId;
   }
   return map;
 }
+function resolveRuleVariation(variations, handle) {
+  if (!handle) return void 0;
+  return variations.find((candidate) => handle === "off" ? candidate.isControl : handle === "on" ? !candidate.isControl : candidate.id === handle || candidate.publicId === handle);
+}
 function resolveForceMap(map, experiments) {
   const resolved = {};
   for (const [experimentHandle, variationHandle] of Object.entries(map ?? {})) {
+    const rules = experiments?.filter((candidate) => candidate?.orderedRule && Array.isArray(candidate.variations) && (candidate.featureFlag?.key === experimentHandle || candidate.orderedRule.flagId === experimentHandle));
+    if (rules?.length) {
+      const valid = isHeldForce(variationHandle) || rules.some((rule) => resolveRuleVariation(rule.variations, variationHandle));
+      if (!valid) continue;
+      resolved[experimentHandle] = variationHandle;
+      for (const rule of rules) {
+        const variation = resolveRuleVariation(rule.variations, variationHandle);
+        resolved[rule.id] = isHeldForce(variationHandle) || !variation ? FORCE_HELD : variation.id;
+      }
+      continue;
+    }
     const experiment = experiments?.find(
       (candidate) => Boolean(candidate?.id) && Array.isArray(candidate.variations) && (candidate.id === experimentHandle || candidate.publicId === experimentHandle)
     );
@@ -382,6 +467,10 @@ function edgeSegmentRulesAreUrlOnly(rules, options = {}) {
       (condition) => condition.js == null && edgeSegmentConditionOperatorIsSupported(condition.operator, options.chargePlane && (condition.signal === "device.type" || condition.signal === "visitor.returning")) && !edgeSegmentConditionRequiresClientEvaluation(condition) && (condition.signal === "url.full" || condition.signal === "url.path" || condition.signal === "url.query" || condition.signal === "geo.country" || options.chargePlane === true && (condition.signal === "device.type" || condition.signal === "visitor.returning" && typeof condition.value === "boolean"))
     );
   });
+}
+function edgeTargetingIsWorkerReproducible(targeting, options = {}) {
+  if (!targeting) return true;
+  return edgeAudienceTargetingIsWorkerReproducible(targeting, options) && edgeUrlTargetingIsWorkerReproducible(targeting);
 }
 function edgeAudienceTargetingIsWorkerReproducible(targeting, options = {}) {
   if (targeting.deviceType != null && targeting.deviceType !== "all" && !(options.chargePlane && ["desktop", "mobile", "tablet"].includes(targeting.deviceType))) return false;
@@ -1020,11 +1109,12 @@ function evaluateEdgeAssignments(experiments, url, visitorId, exclusionGroups, s
   ) ?? {};
   if (!qaMode && isGlobalHoldoutVisitor(holdoutConfig, visitorId)) return [];
   const assignments = [];
+  const deferred = deferredOrderedEntries(experiments, (experiment) => experiment, (experiment, effectiveForces) => experiment.runtime_disabled !== true && !isHeldForce(effectiveForces[experiment.id]) && (Boolean(effectiveForces[experiment.id]) || isExperimentServable(experiment, { qaMode, environment: "production" }) && !weekdayScheduleBlocksDelivery2(experiment.weekdaySchedule, now)) && !edgeTargetingIsWorkerReproducible(experiment.targeting, { chargePlane: options.chargePlaneExperimentIds?.has(experiment.id) }), exclusionGroups, forceMap);
   for (const experiment of experiments) {
     if (!experiment?.id || !Array.isArray(experiment.variations) || experiment.variations.length === 0) {
       continue;
     }
-    if (experiment.runtime_disabled === true) continue;
+    if (experiment.runtime_disabled === true || deferred.has(experiment)) continue;
     const forcedVariationId = forceMap[experiment.id];
     if (isHeldForce(forcedVariationId)) continue;
     if (!forcedVariationId) {
@@ -1069,6 +1159,8 @@ function evaluateEdgeAssignments(experiments, url, visitorId, exclusionGroups, s
     const seenPageIds = /* @__PURE__ */ new Set();
     assignments.push({
       experimentId: experiment.id,
+      ...experiment.orderedRule && experiment.featureFlag ? { featureFlag: experiment.featureFlag } : {},
+      ...experiment.orderedRule ? { orderedRule: experiment.orderedRule } : {},
       variationId: variation.id,
       assignmentEpoch: Number.isSafeInteger(experiment.assignmentEpoch) && (experiment.assignmentEpoch ?? 0) > 0 ? experiment.assignmentEpoch : void 0,
       goalLedgerGeneration: Number.isSafeInteger(experiment.goalLedgerGeneration) && (experiment.goalLedgerGeneration ?? 0) > 0 ? experiment.goalLedgerGeneration : void 0,
@@ -1092,12 +1184,19 @@ function evaluateEdgeAssignments(experiments, url, visitorId, exclusionGroups, s
       goals: normalizeEdgeGoals(experiment.goals)
     });
   }
-  return resolveEdgeExclusionGroups(
+  const afterGroups = resolveEdgeExclusionGroups(
     assignments,
     exclusionGroups,
     visitorId,
     new Set(pinnedForceIds(forceMap)),
     stickyExclusionSelections
+  );
+  const byId = new Map(experiments.filter((experiment) => experiment?.id).map((experiment) => [experiment.id, experiment]));
+  return suppressOrderedAssignments(
+    afterGroups,
+    (assignment) => byId.get(assignment.experimentId),
+    (assignment) => assignment.attributableOnly === true,
+    forceMap
   );
 }
 function hasValidEdgeForce(experiments, forceMap) {
@@ -1543,6 +1642,11 @@ function buildEdgeRuntimeScript(assignments, eventsEndpoint, ingestShopId, inges
     assignmentEpoch: assignment.assignmentEpoch,
     goalLedgerGeneration: assignment.goalLedgerGeneration,
     index: assignment.index,
+    ...assignment.featureFlag ? { flagData: {
+      feature_flag_id: assignment.featureFlag.id,
+      feature_flag_key: assignment.featureFlag.key,
+      ...assignment.orderedRule ? { feature_flag_rule_id: assignment.orderedRule.ruleId } : {}
+    } } : {},
     activePageIds: assignment.activePageIds ?? [],
     attributableOnly: assignment.attributableOnly === true,
     ...assignment.exposureHeld ? { exposureHeld: true } : {},
@@ -1572,7 +1676,7 @@ function buildEdgeRuntimeScript(assignments, eventsEndpoint, ingestShopId, inges
     if (!m || typeof m !== "object") return [];
     const p = edgePreAppliedMutation(m, { experimentId: a.experimentId, index: i });
     return p ? [p] : [];
-  }))) + "window.__dripEdgeAssignments=" + JSON.stringify(edgeAssignmentPayload) + ";var A=" + JSON.stringify(payload) + ";var CO=" + JSON.stringify(cohort ?? "") + ";var HCE=" + JSON.stringify(holdoutConfigEpoch) + ";var E=" + JSON.stringify(eventsEndpoint) + ";var SH=" + JSON.stringify(ingestShopId) + ";var SG=" + JSON.stringify(ingestSignature) + ";var CM=" + JSON.stringify(strictConsentMode) + ";var QM=" + JSON.stringify(qaMode) + ";var SM=" + JSON.stringify(screenshotMode) + ";var _OBS={edge_source:" + JSON.stringify(edgeSource) + ",assignment_ready_ms:" + assignmentReadyMs + "};function sid(){try{var k='drip_sid';var v=sessionStorage.getItem(k);if(v)return v;v=Math.random().toString(36).slice(2)+Date.now().toString(36);sessionStorage.setItem(k,v);return v;}catch(e){return Math.random().toString(36).slice(2)+Date.now().toString(36);}}function uid(){try{var m=document.cookie.match(/(?:^|;\\s*)drip_uid=([^;]+)/);if(m&&m[1])return decodeURIComponent(m[1]);}catch(e){}return Math.random().toString(36).slice(2)+Date.now().toString(36);}function eid(){try{if(window.crypto&&typeof window.crypto.randomUUID==='function')return window.crypto.randomUUID();if(window.crypto&&window.crypto.getRandomValues){var b=new Uint8Array(16);window.crypto.getRandomValues(b);var h='';for(var i=0;i<b.length;i++)h+=b[i].toString(16).padStart(2,'0');return h;}}catch(e){}return Date.now().toString(36)+Math.random().toString(36).slice(2);}function hasConsent(){if(window.__dripHasConsent===true)return true;if(window.__dripHasConsent===false)return false;try{if(/(?:^|;\\s*)drip_consent=1(?:;|$)/.test(document.cookie||''))return true;}catch(e){}if(window.__dripRequireConsent===true)return false;if(!CM)return true;return false;}var SID='';var UID=" + JSON.stringify(initialVisitorId ?? "") + ";var Q=[];var started=false;var clickBound=false;var timer=0;var shopifySynced=false;var shopifySyncDeadline=0;var shopifySyncAttempt=0;var shopifySyncTimer=0;function ensureIds(){if(!hasConsent())return false;if(!SID)SID=sid();if(!UID)UID=uid();return true;}function persistUid(){if(!UID||!hasConsent())return;try{document.cookie='drip_uid='+encodeURIComponent(UID)+'; Max-Age=31536000; Path=/; SameSite=Lax';}catch(e){}}function syncShopify(){if(shopifySynced||!hasConsent())return;if(SM)return;if(!shopifySyncDeadline)shopifySyncDeadline=Date.now()+10000;try{var publish=window.Shopify&&window.Shopify.analytics&&window.Shopify.analytics.publish;if(typeof publish==='function'){publish('drip_assignment_sync',{visitorId:UID,sessionId:SID,qaMode:QM,qaSessionId:'',cohort:CO||undefined,holdoutConfigEpoch:HCE,assignments:A.filter(function(a){return a.attributableOnly!==true;}).map(function(a){return{experimentId:a.experimentId,variationId:a.variationId,assignmentEpoch:a.assignmentEpoch};})});shopifySynced=true;return;}}catch(e){}var remaining=shopifySyncDeadline-Date.now();if(remaining<=0)return;var delay=Math.min(1000,100*Math.pow(2,shopifySyncAttempt++),remaining);shopifySyncTimer=window.setTimeout(syncShopify,delay);}function sys(s,d){var o={};for(var k in s)o[k]=s[k];if(d){for(var k2 in d)o[k2]=d[k2];}for(var k3 in s)o[k3]=s[k3];return o;}function push(t,d,experimentId,vid,eventId){if(SM||!ensureIds())return;d=sys(CO?{cohort:CO,holdout_config_epoch:HCE}:{},d);Q.push({type:t,data:d,experimentId:experimentId,variationId:vid,event_id:eventId,qa_mode:QM,shopId:SH,visitorId:UID,sessionId:SID,url:location.href,ts:Date.now()});if(Q.length>=20)flush();}function flush(){if(!ensureIds()||!Q.length)return;var batch=Q.splice(0,Q.length);fetch(E,{method:'POST',headers:{'Content-Type':'application/json','X-Drip-Shop':SH,'X-Drip-Signature':SG},body:JSON.stringify({events:batch}),keepalive:true}).catch(function(){});}function lg(a){var g=a.goalLedgerGeneration||a.assignmentEpoch;return typeof g==='number'&&g>0?g:1;}function gk(gid,a){return 'drip_goal:'+gid+':'+a.experimentId+'|'+a.variationId+'@'+lg(a);}function fired(gid,a){try{if(localStorage.getItem(gk(gid,a))==='1')return true;return lg(a)===1&&localStorage.getItem('drip_goal:'+gid+':'+a.variationId)==='1';}catch(e){return false;}}function mark(gid,a){try{localStorage.setItem(gk(gid,a),'1');}catch(e){}}function cap(el,arr){var out={};if(!arr||!arr.length)return out;for(var i=0;i<arr.length;i++){var r=arr[i];if(!r||!r.property)continue;if(r.source==='attribute'&&r.attribute){out[r.property]=el.getAttribute(r.attribute);}else if(r.source==='textContent'){out[r.property]=(el.textContent||'').trim().slice(0,500);}else if(r.source==='dataset'&&r.attribute){var key=r.attribute.replace(/^data-/,'').replace(/-([a-z])/g,function(_,c){return c.toUpperCase();});out[r.property]=(el.dataset&&el.dataset[key])||null;}}return out;}function goalActive(g,a){if(g.pageId)return Array.isArray(a.activePageIds)&&a.activePageIds.indexOf(g.pageId)>=0;if(!g.urlPattern)return true;try{return new RegExp(g.urlPattern).test(location.href);}catch(e){return false;}}function fire(goal,a,data){if(SM||!ensureIds()||!goal||!goal.id||!goalActive(goal,a))return;if(goal.countOnce){if(fired(goal.id,a))return;mark(goal.id,a);}var payload=sys({goalId:goal.id},data);push('goal',payload,a.experimentId,a.variationId);}function runPageviewGoals(){for(var i=0;i<A.length;i++){var a=A[i];for(var j=0;j<a.goals.length;j++){var g=a.goals[j];if(g.type==='pageview')fire(g,a);}}}function txtM(el,txt){return(el.textContent||'').trim().toLowerCase().indexOf(txt.trim().toLowerCase())>=0;}function findTxt(el,txt){var n=txt.trim().toLowerCase();while(el&&el!==document.documentElement){if((el.textContent||'').trim().toLowerCase().indexOf(n)>=0)return el;el=el.parentElement;}return null;}function bindClickGoals(){if(clickBound)return;clickBound=true;document.addEventListener('click',function(ev){var t=ev.target;if(!t||!t.closest)return;for(var i=0;i<A.length;i++){var a=A[i];for(var j=0;j<a.goals.length;j++){var g=a.goals[j];if(g.type!=='click')continue;var s=g.selector,tm=g.textMatch;if(!s&&!tm)continue;var m=null;if(s){m=t.closest(s);if(!m)continue;if(tm&&!txtM(m,tm))continue;}else if(tm){m=findTxt(t,tm);if(!m)continue;}if(m)fire(g,a,cap(m,g.capture));}}},true);}var edgePerfEmitted=false,edgePerfPending=null;function emitEdgePerf(){if(edgePerfEmitted)return;edgePerfEmitted=true;var bsMs=0;if(window.performance&&performance.timing)bsMs=Math.max(0,performance.timing.domContentLoadedEventStart-performance.timing.navigationStart);var cacheEl=document.querySelector('[data-drip-cache]');edgePerfPending={edge_reassert_count:edgeDiagnostics.reasserts_count,edge_revert_loops_detected:edgeDiagnostics.revert_loops_detected,edge_first_revert_ms:edgeDiagnostics.first_revert_ms,blank_screen_ms:bsMs,assignment_ready_ms:_OBS.assignment_ready_ms,edge_source:_OBS.edge_source,cache_hit_source:cacheEl?cacheEl.getAttribute('data-drip-cache'):'none'};drainEdgePerf();}function drainEdgePerf(){if(edgePerfPending&&ensureIds()){var payload=edgePerfPending;edgePerfPending=null;push('edge_perf',payload);}}function start(){if(started||!ensureIds())return;started=true;drainEdgePerf();syncShopify();if(CO)push('pageview',{});for(var i=0;i<A.length;i++){var a=A[i];if(!a.attributableOnly&&!a.exposureHeld)push('experiment_viewed',{index:a.index},a.experimentId,a.variationId);}runPageviewGoals();bindClickGoals();timer=window.setInterval(flush,5000);window.setTimeout(flush,120);try{var bsMs=0;if(window.performance&&performance.timing){bsMs=Math.max(0,performance.timing.domContentLoadedEventStart-performance.timing.navigationStart);}var cacheSrc=document.querySelector('[data-drip-cache]')?document.querySelector('[data-drip-cache]').getAttribute('data-drip-cache'):'none';var perfPayload={perf_event_kind:'init',blank_screen_ms:bsMs,assignment_ready_ms:_OBS.assignment_ready_ms,platform:'auto',config_source:_OBS.edge_source,activation_mode:'observer',cache_hit_source:cacheSrc};push('sdk_perf',perfPayload);if(!edgeGuardInstalled)emitEdgePerf();}catch(e){}}window.addEventListener('pagehide',function(){emitEdgePerf();flush();});window.addEventListener('beforeunload',flush);var req=(CM||window.__dripRequireConsent===true||typeof window.__dripHasConsent==='boolean');var consent=hasConsent();function consentCookie(granted){try{document.cookie=granted?'drip_consent=1; Max-Age=31536000; Path=/; SameSite=Lax':'drip_consent=; Max-Age=0; Path=/; SameSite=Lax';}catch(e){}}var prevSet=window.dripSetConsent;window.dripSetConsent=function(granted){window.__dripHasConsent=(granted===true);consentCookie(window.__dripHasConsent);if(typeof prevSet==='function'){try{prevSet(granted);}catch(e){}}if(window.__dripHasConsent){ensureIds();persistUid();start();}else{started=false;Q=[];if(timer){clearInterval(timer);timer=0;}if(shopifySyncTimer){clearTimeout(shopifySyncTimer);shopifySyncTimer=0;}shopifySyncDeadline=0;shopifySyncAttempt=0;}};window.Drip=window.Drip||{};if(typeof window.Drip.flush!=='function'){window.Drip.flush=flush;}if(typeof window.Drip.setConsent!=='function'){window.Drip.setConsent=function(granted){window.dripSetConsent(granted);};}if(typeof window.Drip.trackGoal!=='function'){window.Drip.trackGoal=function(goalId,data){for(var i=0;i<A.length;i++){var a=A[i];for(var j=0;j<a.goals.length;j++){var g=a.goals[j];if(g.id===goalId)fire(g,a,data||{});}}};}if(typeof window.Drip.trackRevenue!=='function'){window.Drip.trackRevenue=function(revenue,data){var p=sys({goalId:'__revenue__',revenue:revenue},data);if(data&&'currency' in data){var currency=typeof data.currency==='string'?data.currency.trim().toUpperCase():'';if((' " + ISO_4217_CURRENCY_CODES.join(" ") + " ').indexOf(' '+currency+' ')!==-1){p.currency=currency;}else{delete p.currency;p.currency_raw=data.currency;p.money_error='invalid_currency';}}var eventId=eid();var revenueAssignments=A.filter(function(a){return a.attributableOnly!==true;});if(!revenueAssignments.length){push('goal',p,undefined,undefined,eventId);return;}for(var i=0;i<revenueAssignments.length;i++){var a=revenueAssignments[i];push('goal',p,a.experimentId,a.variationId,eventId);}};}if(!req||consent)start();})();";
+  }))) + "window.__dripEdgeAssignments=" + JSON.stringify(edgeAssignmentPayload) + ";var A=" + JSON.stringify(payload) + ";var CO=" + JSON.stringify(cohort ?? "") + ";var HCE=" + JSON.stringify(holdoutConfigEpoch) + ";var E=" + JSON.stringify(eventsEndpoint) + ";var SH=" + JSON.stringify(ingestShopId) + ";var SG=" + JSON.stringify(ingestSignature) + ";var CM=" + JSON.stringify(strictConsentMode) + ";var QM=" + JSON.stringify(qaMode) + ";var SM=" + JSON.stringify(screenshotMode) + ";var _OBS={edge_source:" + JSON.stringify(edgeSource) + ",assignment_ready_ms:" + assignmentReadyMs + "};function sid(){try{var k='drip_sid';var v=sessionStorage.getItem(k);if(v)return v;v=Math.random().toString(36).slice(2)+Date.now().toString(36);sessionStorage.setItem(k,v);return v;}catch(e){return Math.random().toString(36).slice(2)+Date.now().toString(36);}}function uid(){try{var m=document.cookie.match(/(?:^|;\\s*)drip_uid=([^;]+)/);if(m&&m[1])return decodeURIComponent(m[1]);}catch(e){}return Math.random().toString(36).slice(2)+Date.now().toString(36);}function eid(){try{if(window.crypto&&typeof window.crypto.randomUUID==='function')return window.crypto.randomUUID();if(window.crypto&&window.crypto.getRandomValues){var b=new Uint8Array(16);window.crypto.getRandomValues(b);var h='';for(var i=0;i<b.length;i++)h+=b[i].toString(16).padStart(2,'0');return h;}}catch(e){}return Date.now().toString(36)+Math.random().toString(36).slice(2);}function hasConsent(){if(window.__dripHasConsent===true)return true;if(window.__dripHasConsent===false)return false;try{if(/(?:^|;\\s*)drip_consent=1(?:;|$)/.test(document.cookie||''))return true;}catch(e){}if(window.__dripRequireConsent===true)return false;if(!CM)return true;return false;}var SID='';var UID=" + JSON.stringify(initialVisitorId ?? "") + ";var Q=[];var started=false;var clickBound=false;var timer=0;var shopifySynced=false;var shopifySyncDeadline=0;var shopifySyncAttempt=0;var shopifySyncTimer=0;function ensureIds(){if(!hasConsent())return false;if(!SID)SID=sid();if(!UID)UID=uid();return true;}function persistUid(){if(!UID||!hasConsent())return;try{document.cookie='drip_uid='+encodeURIComponent(UID)+'; Max-Age=31536000; Path=/; SameSite=Lax';}catch(e){}}function syncShopify(){if(shopifySynced||!hasConsent())return;if(SM)return;if(!shopifySyncDeadline)shopifySyncDeadline=Date.now()+10000;try{var publish=window.Shopify&&window.Shopify.analytics&&window.Shopify.analytics.publish;if(typeof publish==='function'){publish('drip_assignment_sync',{visitorId:UID,sessionId:SID,qaMode:QM,qaSessionId:'',cohort:CO||undefined,holdoutConfigEpoch:HCE,assignments:A.filter(function(a){return a.attributableOnly!==true;}).map(function(a){return{experimentId:a.experimentId,variationId:a.variationId,assignmentEpoch:a.assignmentEpoch};})});shopifySynced=true;return;}}catch(e){}var remaining=shopifySyncDeadline-Date.now();if(remaining<=0)return;var delay=Math.min(1000,100*Math.pow(2,shopifySyncAttempt++),remaining);shopifySyncTimer=window.setTimeout(syncShopify,delay);}function sys(s,d){var o={};for(var k in s)o[k]=s[k];if(d){for(var k2 in d)o[k2]=d[k2];}for(var k3 in s)o[k3]=s[k3];return o;}function push(t,d,experimentId,vid,eventId){if(SM||!ensureIds())return;d=sys(CO?{cohort:CO,holdout_config_epoch:HCE}:{},d);Q.push({type:t,data:d,experimentId:experimentId,variationId:vid,event_id:eventId,qa_mode:QM,shopId:SH,visitorId:UID,sessionId:SID,url:location.href,ts:Date.now()});if(Q.length>=20)flush();}function flush(){if(!ensureIds()||!Q.length)return;var batch=Q.splice(0,Q.length);fetch(E,{method:'POST',headers:{'Content-Type':'application/json','X-Drip-Shop':SH,'X-Drip-Signature':SG},body:JSON.stringify({events:batch}),keepalive:true}).catch(function(){});}function lg(a){var g=a.goalLedgerGeneration||a.assignmentEpoch;return typeof g==='number'&&g>0?g:1;}function gk(gid,a){return 'drip_goal:'+gid+':'+a.experimentId+'|'+a.variationId+'@'+lg(a);}function fired(gid,a){try{if(localStorage.getItem(gk(gid,a))==='1')return true;return lg(a)===1&&localStorage.getItem('drip_goal:'+gid+':'+a.variationId)==='1';}catch(e){return false;}}function mark(gid,a){try{localStorage.setItem(gk(gid,a),'1');}catch(e){}}function cap(el,arr){var out={};if(!arr||!arr.length)return out;for(var i=0;i<arr.length;i++){var r=arr[i];if(!r||!r.property)continue;if(r.source==='attribute'&&r.attribute){out[r.property]=el.getAttribute(r.attribute);}else if(r.source==='textContent'){out[r.property]=(el.textContent||'').trim().slice(0,500);}else if(r.source==='dataset'&&r.attribute){var key=r.attribute.replace(/^data-/,'').replace(/-([a-z])/g,function(_,c){return c.toUpperCase();});out[r.property]=(el.dataset&&el.dataset[key])||null;}}return out;}function goalActive(g,a){if(g.pageId)return Array.isArray(a.activePageIds)&&a.activePageIds.indexOf(g.pageId)>=0;if(!g.urlPattern)return true;try{return new RegExp(g.urlPattern).test(location.href);}catch(e){return false;}}function fire(goal,a,data){if(SM||!ensureIds()||!goal||!goal.id||!goalActive(goal,a))return;if(goal.countOnce){if(fired(goal.id,a))return;mark(goal.id,a);}var payload=sys({goalId:goal.id},data);push('goal',payload,a.experimentId,a.variationId);}function runPageviewGoals(){for(var i=0;i<A.length;i++){var a=A[i];for(var j=0;j<a.goals.length;j++){var g=a.goals[j];if(g.type==='pageview')fire(g,a);}}}function txtM(el,txt){return(el.textContent||'').trim().toLowerCase().indexOf(txt.trim().toLowerCase())>=0;}function findTxt(el,txt){var n=txt.trim().toLowerCase();while(el&&el!==document.documentElement){if((el.textContent||'').trim().toLowerCase().indexOf(n)>=0)return el;el=el.parentElement;}return null;}function bindClickGoals(){if(clickBound)return;clickBound=true;document.addEventListener('click',function(ev){var t=ev.target;if(!t||!t.closest)return;for(var i=0;i<A.length;i++){var a=A[i];for(var j=0;j<a.goals.length;j++){var g=a.goals[j];if(g.type!=='click')continue;var s=g.selector,tm=g.textMatch;if(!s&&!tm)continue;var m=null;if(s){m=t.closest(s);if(!m)continue;if(tm&&!txtM(m,tm))continue;}else if(tm){m=findTxt(t,tm);if(!m)continue;}if(m)fire(g,a,cap(m,g.capture));}}},true);}var edgePerfEmitted=false,edgePerfPending=null;function emitEdgePerf(){if(edgePerfEmitted)return;edgePerfEmitted=true;var bsMs=0;if(window.performance&&performance.timing)bsMs=Math.max(0,performance.timing.domContentLoadedEventStart-performance.timing.navigationStart);var cacheEl=document.querySelector('[data-drip-cache]');edgePerfPending={edge_reassert_count:edgeDiagnostics.reasserts_count,edge_revert_loops_detected:edgeDiagnostics.revert_loops_detected,edge_first_revert_ms:edgeDiagnostics.first_revert_ms,blank_screen_ms:bsMs,assignment_ready_ms:_OBS.assignment_ready_ms,edge_source:_OBS.edge_source,cache_hit_source:cacheEl?cacheEl.getAttribute('data-drip-cache'):'none'};drainEdgePerf();}function drainEdgePerf(){if(edgePerfPending&&ensureIds()){var payload=edgePerfPending;edgePerfPending=null;push('edge_perf',payload);}}function start(){if(started||!ensureIds())return;started=true;drainEdgePerf();syncShopify();if(CO)push('pageview',{});for(var i=0;i<A.length;i++){var a=A[i];if(!a.attributableOnly&&!a.exposureHeld)push('experiment_viewed',Object.assign({index:a.index},a.flagData),a.experimentId,a.variationId);}runPageviewGoals();bindClickGoals();timer=window.setInterval(flush,5000);window.setTimeout(flush,120);try{var bsMs=0;if(window.performance&&performance.timing){bsMs=Math.max(0,performance.timing.domContentLoadedEventStart-performance.timing.navigationStart);}var cacheSrc=document.querySelector('[data-drip-cache]')?document.querySelector('[data-drip-cache]').getAttribute('data-drip-cache'):'none';var perfPayload={perf_event_kind:'init',blank_screen_ms:bsMs,assignment_ready_ms:_OBS.assignment_ready_ms,platform:'auto',config_source:_OBS.edge_source,activation_mode:'observer',cache_hit_source:cacheSrc};push('sdk_perf',perfPayload);if(!edgeGuardInstalled)emitEdgePerf();}catch(e){}}window.addEventListener('pagehide',function(){emitEdgePerf();flush();});window.addEventListener('beforeunload',flush);var req=(CM||window.__dripRequireConsent===true||typeof window.__dripHasConsent==='boolean');var consent=hasConsent();function consentCookie(granted){try{document.cookie=granted?'drip_consent=1; Max-Age=31536000; Path=/; SameSite=Lax':'drip_consent=; Max-Age=0; Path=/; SameSite=Lax';}catch(e){}}var prevSet=window.dripSetConsent;window.dripSetConsent=function(granted){window.__dripHasConsent=(granted===true);consentCookie(window.__dripHasConsent);if(typeof prevSet==='function'){try{prevSet(granted);}catch(e){}}if(window.__dripHasConsent){ensureIds();persistUid();start();}else{started=false;Q=[];if(timer){clearInterval(timer);timer=0;}if(shopifySyncTimer){clearTimeout(shopifySyncTimer);shopifySyncTimer=0;}shopifySyncDeadline=0;shopifySyncAttempt=0;}};window.Drip=window.Drip||{};if(typeof window.Drip.flush!=='function'){window.Drip.flush=flush;}if(typeof window.Drip.setConsent!=='function'){window.Drip.setConsent=function(granted){window.dripSetConsent(granted);};}if(typeof window.Drip.trackGoal!=='function'){window.Drip.trackGoal=function(goalId,data){for(var i=0;i<A.length;i++){var a=A[i];for(var j=0;j<a.goals.length;j++){var g=a.goals[j];if(g.id===goalId)fire(g,a,data||{});}}};}if(typeof window.Drip.trackRevenue!=='function'){window.Drip.trackRevenue=function(revenue,data){var p=sys({goalId:'__revenue__',revenue:revenue},data);if(data&&'currency' in data){var currency=typeof data.currency==='string'?data.currency.trim().toUpperCase():'';if((' " + ISO_4217_CURRENCY_CODES.join(" ") + " ').indexOf(' '+currency+' ')!==-1){p.currency=currency;}else{delete p.currency;p.currency_raw=data.currency;p.money_error='invalid_currency';}}var eventId=eid();var revenueAssignments=A.filter(function(a){return a.attributableOnly!==true;});if(!revenueAssignments.length){push('goal',p,undefined,undefined,eventId);return;}for(var i=0;i<revenueAssignments.length;i++){var a=revenueAssignments[i];push('goal',p,a.experimentId,a.variationId,eventId);}};}if(!req||consent)start();})();";
 }
 function resolveEdgeVisitorContext(initialVisitorId, shouldSetVisitorCookie, config, edgeConsentGranted, createVisitorId = () => randomHexId(16), qaMode = false) {
   const strictConsentPending = config.runtime?.consentMode?.enabled === true && !edgeConsentGranted;
@@ -1853,7 +1957,7 @@ function classifyRequest(request) {
 }
 
 // src/version.ts
-var EDGE_WORKER_VERSION = "1.2.16";
+var EDGE_WORKER_VERSION = "1.2.17";
 var MINIMUM_COMPATIBLE_ENGINE_VERSION_FIELD = "minimumEdgeEngineVersion";
 function parseVersion(value) {
   const match = value.trim().match(

@@ -2,6 +2,11 @@
 
 Changes to the Apex Edge Worker, newest first, in Keep a Changelog format.
 
+## [1.2.17] - 2026-10-23
+
+### Changed
+- Apply ordered feature-flag audience suppression after exclusions, including holdbacks, and retain rule identity on exposures. (#11960)
+
 ## [1.2.16] - 2026-10-21
 
 ### Fixed
