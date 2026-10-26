@@ -2,6 +2,11 @@
 
 Changes to the Apex Edge Worker, newest first, in Keep a Changelog format.
 
+## [1.2.18] - 2026-10-25
+
+### Changed
+- Update the shared config contract for SDK diagnostic sampling. Experiment assignment and rendering behavior stay unchanged. (#12500)
+
 ## [1.2.17] - 2026-10-23
 
 ### Changed
