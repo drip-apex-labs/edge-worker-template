@@ -1,4 +1,4 @@
-// Apex Edge Worker v1.2.18 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
+// Apex Edge Worker v1.2.19 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
 // src/limits.ts
 var DEFAULT_ORIGIN_FETCH_TIMEOUT_MS = 5e3;
 var DEFAULT_MAX_MUTATION_BYTES = 256 * 1024;
@@ -614,8 +614,13 @@ if(typeof MutationObserver==='function'&&document.documentElement){edgeGuardInst
 }
 
 // ../shared-runtime/src/experiment-servability.ts
+function featureFlagDeadlineBlocksDelivery(experiment, now = Date.now()) {
+  const flag = experiment.featureFlag;
+  const end = flag?.endsAtMs ?? flag?.endsAt;
+  return end != null && !(Number.isFinite(end) && end > now);
+}
 function isExperimentServable(experiment, context) {
-  if (!experiment || experiment.runtime_disabled === true) return false;
+  if (!experiment || experiment.runtime_disabled === true || featureFlagDeadlineBlocksDelivery(experiment, context.now)) return false;
   const environment = context.environment.trim().toLowerCase() || "production";
   const experimentEnvironment = experiment.environment_key?.trim().toLowerCase();
   if (experimentEnvironment && experimentEnvironment !== environment) return false;
@@ -1109,16 +1114,16 @@ function evaluateEdgeAssignments(experiments, url, visitorId, exclusionGroups, s
   ) ?? {};
   if (!qaMode && isGlobalHoldoutVisitor(holdoutConfig, visitorId)) return [];
   const assignments = [];
-  const deferred = deferredOrderedEntries(experiments, (experiment) => experiment, (experiment, effectiveForces) => experiment.runtime_disabled !== true && !isHeldForce(effectiveForces[experiment.id]) && (Boolean(effectiveForces[experiment.id]) || isExperimentServable(experiment, { qaMode, environment: "production" }) && !weekdayScheduleBlocksDelivery2(experiment.weekdaySchedule, now)) && !edgeTargetingIsWorkerReproducible(experiment.targeting, { chargePlane: options.chargePlaneExperimentIds?.has(experiment.id) }), exclusionGroups, forceMap);
+  const deferred = deferredOrderedEntries(experiments, (experiment) => experiment, (experiment, effectiveForces) => experiment.runtime_disabled !== true && !featureFlagDeadlineBlocksDelivery(experiment, now.getTime()) && !isHeldForce(effectiveForces[experiment.id]) && (Boolean(effectiveForces[experiment.id]) || isExperimentServable(experiment, { qaMode, environment: "production", now: now.getTime() }) && !weekdayScheduleBlocksDelivery2(experiment.weekdaySchedule, now)) && !edgeTargetingIsWorkerReproducible(experiment.targeting, { chargePlane: options.chargePlaneExperimentIds?.has(experiment.id) }), exclusionGroups, forceMap);
   for (const experiment of experiments) {
     if (!experiment?.id || !Array.isArray(experiment.variations) || experiment.variations.length === 0) {
       continue;
     }
-    if (experiment.runtime_disabled === true || deferred.has(experiment)) continue;
+    if (experiment.runtime_disabled === true || featureFlagDeadlineBlocksDelivery(experiment, now.getTime()) || deferred.has(experiment)) continue;
     const forcedVariationId = forceMap[experiment.id];
     if (isHeldForce(forcedVariationId)) continue;
     if (!forcedVariationId) {
-      if (!isExperimentServable(experiment, { qaMode, environment: "production" })) continue;
+      if (!isExperimentServable(experiment, { qaMode, environment: "production", now: now.getTime() })) continue;
       if (weekdayScheduleBlocksDelivery2(experiment.weekdaySchedule, now)) continue;
     }
     const audienceTargetingMatches = matchesEdgeAudienceTargeting(
@@ -1957,7 +1962,7 @@ function classifyRequest(request) {
 }
 
 // src/version.ts
-var EDGE_WORKER_VERSION = "1.2.18";
+var EDGE_WORKER_VERSION = "1.2.19";
 var MINIMUM_COMPATIBLE_ENGINE_VERSION_FIELD = "minimumEdgeEngineVersion";
 function parseVersion(value) {
   const match = value.trim().match(

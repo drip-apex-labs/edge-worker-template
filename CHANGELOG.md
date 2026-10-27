@@ -2,6 +2,11 @@
 
 Changes to the Apex Edge Worker, newest first, in Keep a Changelog format.
 
+## [1.2.19] - 2026-10-26
+
+### Changed
+- Honor feature-flag end dates in cached configurations, including forced assignments and ordered audiences. Deadline metadata stays on every rule and base entry; owner identity remains management-only. (#12062)
+
 ## [1.2.18] - 2026-10-25
 
 ### Changed
