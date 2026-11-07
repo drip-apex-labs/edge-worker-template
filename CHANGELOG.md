@@ -2,6 +2,11 @@
 
 Changes to the Apex Edge Worker, newest first, in Keep a Changelog format.
 
+## [1.2.20] - 2026-11-05
+
+### Security
+- HTML mutations are applied at the edge only when they are plain markup (listed tags, quoted attribute values, balanced nesting) whose attributes pass the shared rule; anything else is left to the Apex SDK, which sanitizes it in the browser. Every URL-bearing attribute is checked as a URL. (#16137)
+
 ## [1.2.19] - 2026-10-26
 
 ### Changed

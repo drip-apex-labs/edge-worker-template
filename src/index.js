@@ -1,4 +1,4 @@
-// Apex Edge Worker v1.2.19 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
+// Apex Edge Worker v1.2.20 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
 // src/limits.ts
 var DEFAULT_ORIGIN_FETCH_TIMEOUT_MS = 5e3;
 var DEFAULT_MAX_MUTATION_BYTES = 256 * 1024;
@@ -577,6 +577,7 @@ var CONSECUTIVE_FRAME_MS = 34;
 var GUARD_TIMEOUT_MS = 8e3;
 
 // ../edge-engine/src/edge-guard.ts
+var BLOCKED_TARGET = /^(?:script|object|embed|applet|frame|frameset|base|meta|link|portal|noscript)$/;
 function buildEdgeGuard(preApplied) {
   if (preApplied.length === 0) {
     return `var edgeGuardInstalled=false;
@@ -586,7 +587,7 @@ var edgeDiagnostics={reasserts_count:0,revert_loops_detected:0,first_revert_ms:n
 var edgeGuardInstalled=false;
 var edgeDiagnostics={reasserts_count:0,revert_loops_detected:0,first_revert_ms:null};
 (function(){
-var seen=new Set(),handedOff=false,stopped=false,pending=false,last=-Infinity,consecutive=0,observer,timer,landing=location.href;
+var BLOCKED=/${BLOCKED_TARGET.source}/,seen=new Set(),handedOff=false,stopped=false,pending=false,last=-Infinity,consecutive=0,observer,timer,landing=location.href;
 function stop(){if(stopped)return;stopped=true;if(observer)observer.disconnect();clearTimeout(timer);document.removeEventListener('DOMContentLoaded',ready);emitEdgePerf();}
 window.__dripEdgeGuardHandoff=function(){handedOff=true;emitEdgePerf();if(!preApplied.some(function(m){return m.a==='remove';}))stop();return edgeDiagnostics;};
 function remember(el){var keys=el.getAttribute('data-drip-edge-applied');if(keys)keys.split(/\\s+/).forEach(function(key){if(key)seen.add(key);});}
@@ -597,9 +598,10 @@ function relevant(records){return preApplied.some(function(m){var nodes=targets(
 function repair(){pending=false;if(stopped||!document.body)return;var changed=false;
 if(handedOff&&location.href!==landing){stop();return;}
 preApplied.forEach(function(m){if(m.a!=='remove'&&(handedOff||!seen.has(m.e+':'+m.i)))return;targets(m).forEach(function(el){
-if(m.a==='text'||m.a==='setText'){if(el.textContent!==m.t){el.textContent=m.t;changed=true;}}
-else if(m.a==='html'){var template=document.createElement('template');template.innerHTML=m.h;if(el.innerHTML!==template.innerHTML){el.innerHTML=template.innerHTML;changed=true;}}
-else if(m.a==='attribute'){Object.keys(m.at||{}).forEach(function(k){var v=m.at[k];if(el.getAttribute(k)!==v){if(v===null)el.removeAttribute(k);else el.setAttribute(k,v);changed=true;}});}
+var blocked=BLOCKED.test(el.localName);
+if(m.a==='text'||m.a==='setText'){if(!blocked&&el.textContent!==m.t){el.textContent=m.t;changed=true;}}
+else if(m.a==='html'){if(blocked)return;var template=document.createElement('template');template.innerHTML=m.h;if(el.innerHTML!==template.innerHTML){el.innerHTML=template.innerHTML;changed=true;}}
+else if(m.a==='attribute'){Object.keys(m.at||{}).forEach(function(k){var v=m.at[k];if((v===null||!blocked)&&el.getAttribute(k)!==v){if(v===null)el.removeAttribute(k);else el.setAttribute(k,v);changed=true;}});}
 else if(m.a==='style'||m.a==='setStyle'){Object.keys(m.st||{}).forEach(function(k){var probe=document.createElement('span');probe.setAttribute('style',k+':'+m.st[k]);var v=probe.style.getPropertyValue(k),priority=probe.style.getPropertyPriority(k);if(el.style.getPropertyValue(k)!==v||el.style.getPropertyPriority(k)!==priority){el.style.setProperty(k,v,priority);changed=true;}});}
 else if(m.a==='remove'){el.remove();changed=true;}
 else if(m.k&&el.parentElement){var exists=Array.prototype.some.call(el.parentElement.children,function(n){return n.getAttribute('data-drip-inserted')===m.k;});if(!exists){el.insertAdjacentHTML(m.a==='insertBefore'?'beforebegin':'afterend',m.h);changed=true;}}
@@ -1270,47 +1272,138 @@ function hasDangerousScheme(rawValue) {
   const normalizedValue = decodeHtmlEntities(rawValue).replace(/[\u0000-\u0020]+/g, "").toLowerCase();
   return normalizedValue.startsWith("javascript:") || normalizedValue.startsWith("vbscript:");
 }
-var HTML_SANITIZER_SENTINEL = "\0";
-var HTML_SANITIZER_PLACEHOLDER = /\x00V(\d+)\x00/g;
-var HTML_SANITIZER_URL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
-var HTML_SANITIZER_OPENING_TAG = /<[a-zA-Z][a-zA-Z0-9:-]*(?:[^>"']|"[^"]*"|'[^']*')*>/g;
-function sanitizeOpeningTag(tag) {
-  const originalValues = [];
-  const mask = (value) => {
-    const index = originalValues.length;
-    originalValues.push(value);
-    return `${HTML_SANITIZER_SENTINEL}V${index}${HTML_SANITIZER_SENTINEL}`;
+var URL_ATTRIBUTE = /^(?:href|src|action|formaction|xlink:href|data|codebase|background|poster|srcset|ping)$/;
+var SCRIPT_ATTRIBUTE = /^(?:on|srcdoc$)/;
+var UNSAFE_URL = /^(?:javascript:|vbscript:|data:(?!image\/(?:png|jpeg|gif|webp|avif)[;,]))/;
+var EDGE_HTML_TAGS = /* @__PURE__ */ new Set([
+  "a",
+  "abbr",
+  "article",
+  "aside",
+  "b",
+  "bdi",
+  "bdo",
+  "blockquote",
+  "br",
+  "button",
+  "caption",
+  "cite",
+  "code",
+  "col",
+  "colgroup",
+  "dd",
+  "del",
+  "details",
+  "dfn",
+  "div",
+  "dl",
+  "dt",
+  "em",
+  "figcaption",
+  "figure",
+  "footer",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "header",
+  "hr",
+  "i",
+  "iframe",
+  "img",
+  "ins",
+  "kbd",
+  "label",
+  "li",
+  "main",
+  "mark",
+  "nav",
+  "ol",
+  "p",
+  "picture",
+  "pre",
+  "q",
+  "s",
+  "samp",
+  "section",
+  "small",
+  "source",
+  "span",
+  "strong",
+  "sub",
+  "summary",
+  "sup",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "time",
+  "tr",
+  "u",
+  "ul",
+  "var",
+  "video",
+  "wbr",
+  // Inline SVG icons.
+  "svg",
+  "g",
+  "path",
+  "circle",
+  "rect",
+  "line",
+  "polyline",
+  "polygon",
+  "ellipse",
+  "defs",
+  "lineargradient",
+  "radialgradient",
+  "stop",
+  "clippath"
+]);
+var EDGE_HTML_VOID_TAGS = /* @__PURE__ */ new Set(["br", "col", "hr", "img", "source", "wbr"]);
+var EDGE_HTML_SVG_TAGS = /* @__PURE__ */ new Set(["svg", "g", "path", "circle", "rect", "line", "polyline", "polygon", "ellipse", "defs", "lineargradient", "radialgradient", "stop", "clippath"]);
+var EDGE_HTML_TEXT = /[^<]+/y;
+var EDGE_HTML_OPEN = /<([a-zA-Z][a-zA-Z0-9]*)/y;
+var EDGE_HTML_ATTRIBUTE = /[\t\n\f\r ]+([a-zA-Z_:][a-zA-Z0-9_:.-]*)(?:[\t\n\f\r ]*=[\t\n\f\r ]*(?:"([^"<>]*)"|'([^'<>]*)'))?/y;
+var EDGE_HTML_OPEN_END = /[\t\n\f\r ]*(\/?)>/y;
+var EDGE_HTML_CLOSE = /<\/([a-zA-Z][a-zA-Z0-9]*)[\t\n\f\r ]*>/y;
+function edgeHtmlFragment(html) {
+  const open = [];
+  let i = 0;
+  const at = (pattern) => {
+    pattern.lastIndex = i;
+    const match = pattern.exec(html);
+    if (match) i = pattern.lastIndex;
+    return match;
   };
-  const resolvePlaceholders = (masked) => masked.replace(HTML_SANITIZER_PLACEHOLDER, (whole, index) => {
-    const original = originalValues[Number(index)];
-    return original ?? whole;
-  });
-  const maskedTag = tag.replace(
-    /=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g,
-    (whole, doubleQuoted, singleQuoted, unquoted) => {
-      if (doubleQuoted !== void 0) return `="${mask(doubleQuoted)}"`;
-      if (singleQuoted !== void 0) return `='${mask(singleQuoted)}'`;
-      const rawValue = unquoted ?? "";
-      if (HTML_SANITIZER_URL_SCHEME.test(rawValue)) return `=${mask(rawValue)}`;
-      const boundary = rawValue.indexOf("/");
-      if (boundary === -1) return `=${mask(rawValue)}`;
-      return `=${mask(rawValue.slice(0, boundary))}${rawValue.slice(boundary)}`;
+  while (i < html.length) {
+    if (at(EDGE_HTML_TEXT)) continue;
+    const close = at(EDGE_HTML_CLOSE);
+    if (close) {
+      if (open.pop() !== close[1].toLowerCase()) return null;
+      continue;
     }
-  );
-  const strippedTag = maskedTag.replace(/[\s/]+on[a-z0-9_-]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "").replace(/[\s/]+srcdoc\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "").replace(
-    /[\s/]+(href|src|action|formaction|xlink:href)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi,
-    (attribute, _name, doubleQuoted, singleQuoted, unquoted) => {
-      const maskedValue = doubleQuoted ?? singleQuoted ?? unquoted ?? "";
-      const originalValue = resolvePlaceholders(maskedValue);
-      return hasDangerousScheme(originalValue) ? "" : attribute;
+    const tag = at(EDGE_HTML_OPEN);
+    if (!tag) return null;
+    const name = tag[1].toLowerCase();
+    if (!EDGE_HTML_TAGS.has(name)) return null;
+    for (let attribute = at(EDGE_HTML_ATTRIBUTE); attribute; attribute = at(EDGE_HTML_ATTRIBUTE)) {
+      if (!isSafeMutationAttribute(attribute[1], attribute[2] ?? attribute[3] ?? "")) return null;
     }
-  );
-  return resolvePlaceholders(strippedTag);
-}
-function sanitizeHtmlFragment(html) {
-  const withoutSentinel = html.split(HTML_SANITIZER_SENTINEL).join("");
-  const withoutScripts = withoutSentinel.replace(/<script\b[^>]*>[\s\S]*?<\/script\b[^>]*>/gi, "").replace(/<\/?script\b[^>]*>/gi, "");
-  return withoutScripts.replace(HTML_SANITIZER_OPENING_TAG, (tag) => sanitizeOpeningTag(tag));
+    const end = at(EDGE_HTML_OPEN_END);
+    if (!end) return null;
+    if (EDGE_HTML_VOID_TAGS.has(name)) continue;
+    if (end[1]) {
+      if (!EDGE_HTML_SVG_TAGS.has(name)) return null;
+      continue;
+    }
+    open.push(name);
+  }
+  return open.length === 0 ? html : null;
 }
 function isSafeCssValue(value) {
   const decodedValue = decodeHtmlEntities(value);
@@ -1321,19 +1414,24 @@ function isSafeMutationAttribute(name, value) {
   const normalizedName = name.trim().toLowerCase();
   if (!normalizedName) return false;
   if (value == null) return true;
-  if (normalizedName.startsWith("on") || normalizedName === "srcdoc") return false;
+  if (SCRIPT_ATTRIBUTE.test(normalizedName)) return false;
   if (normalizedName === "style") return isSafeCssValue(value);
-  if (["href", "src", "action", "formaction", "xlink:href"].includes(normalizedName)) {
-    return !hasDangerousScheme(value);
+  const normalizedValue = decodeHtmlEntities(value).replace(/[\u0000- ]+/g, "").toLowerCase();
+  if (normalizedName === "attributename") {
+    const target = normalizedValue.replace(/^.*:/, "");
+    return !URL_ATTRIBUTE.test(target) && !SCRIPT_ATTRIBUTE.test(target);
   }
-  return true;
+  const pieces = normalizedName === "srcset" ? normalizedValue.split(",") : normalizedName === "ping" ? decodeHtmlEntities(value).split(/[\t\n\f\r ]+/).map((url) => url.replace(/[\u0000- ]+/g, "").toLowerCase()) : [normalizedValue];
+  return !URL_ATTRIBUTE.test(normalizedName) || !pieces.some((url) => UNSAFE_URL.test(url));
 }
 function getEdgeMutationKey(mutation, index) {
   return `${mutation.action}:${index}:${mutation.selector}:${mutation.html || mutation.text || ""}`;
 }
 function stampedInsertHtml(mutation, stamp) {
   if (typeof mutation.html !== "string" || /data-drip-inserted/i.test(mutation.html)) return null;
-  const html = sanitizeHtmlFragment(mutation.html).trim();
+  const gated = edgeHtmlFragment(mutation.html);
+  if (gated === null) return null;
+  const html = gated.trim();
   const tokens = html.match(/<(?:(?:"[^"]*"|'[^']*')|[^'">])*>|[^<]+/g) ?? [];
   const stack = [];
   let roots = 0;
@@ -1369,8 +1467,10 @@ function edgePreAppliedMutation(mutation, stamp) {
     case "text":
     case "setText":
       return typeof mutation.text === "string" ? { ...base, t: mutation.text } : null;
-    case "html":
-      return typeof mutation.html === "string" ? { ...base, h: sanitizeHtmlFragment(mutation.html) } : null;
+    case "html": {
+      const h = typeof mutation.html === "string" ? edgeHtmlFragment(mutation.html) : null;
+      return h === null ? null : { ...base, h };
+    }
     case "remove":
       return base;
     case "insertBefore":
@@ -1405,21 +1505,23 @@ function applyMutationToRewriter(rewriter, mutation, stamp) {
     element.setAttribute("data-drip-edge-applied", keys.join(" "));
   };
   switch (mutation.action) {
-    case "html":
+    case "html": {
+      const html = typeof mutation.html === "string" ? edgeHtmlFragment(mutation.html) : null;
+      if (html === null) return;
       rewriter.on(selector, {
         element(element) {
-          if (typeof mutation.html === "string") {
-            mark(element);
-            element.setInnerContent(sanitizeHtmlFragment(mutation.html), { html: true });
-          }
+          if (BLOCKED_TARGET.test(String(element.tagName).toLowerCase())) return;
+          mark(element);
+          element.setInnerContent(html, { html: true });
         }
       });
       return;
+    }
     case "text":
     case "setText":
       rewriter.on(selector, {
         element(element) {
-          if (typeof mutation.text === "string") {
+          if (typeof mutation.text === "string" && !BLOCKED_TARGET.test(String(element.tagName).toLowerCase())) {
             mark(element);
             element.setInnerContent(mutation.text, { html: false });
           }
@@ -1431,11 +1533,12 @@ function applyMutationToRewriter(rewriter, mutation, stamp) {
       if (!applied?.at) return;
       rewriter.on(selector, {
         element(element) {
+          const blocked = BLOCKED_TARGET.test(String(element.tagName).toLowerCase());
           for (const [name, value] of Object.entries(applied.at)) {
             if (value === null) element.removeAttribute(name);
-            else element.setAttribute(name, value);
+            else if (!blocked) element.setAttribute(name, value);
           }
-          mark(element);
+          if (!blocked) mark(element);
         }
       });
       return;
@@ -1962,7 +2065,7 @@ function classifyRequest(request) {
 }
 
 // src/version.ts
-var EDGE_WORKER_VERSION = "1.2.19";
+var EDGE_WORKER_VERSION = "1.2.20";
 var MINIMUM_COMPATIBLE_ENGINE_VERSION_FIELD = "minimumEdgeEngineVersion";
 function parseVersion(value) {
   const match = value.trim().match(
