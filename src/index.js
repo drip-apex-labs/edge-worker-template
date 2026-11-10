@@ -1,4 +1,4 @@
-// Apex Edge Worker v1.2.20 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
+// Apex Edge Worker v1.2.21 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
 // src/limits.ts
 var DEFAULT_ORIGIN_FETCH_TIMEOUT_MS = 5e3;
 var DEFAULT_MAX_MUTATION_BYTES = 256 * 1024;
@@ -144,107 +144,6 @@ function pinnedForceIds(map) {
 }
 
 // ../shared-runtime/src/targeting-core.ts
-function isRegexOuterQuantifierStart(pattern, index) {
-  return pattern[index] !== "?" && isRegexQuantifierStart(pattern, index);
-}
-function isRegexQuantifierStart(pattern, index) {
-  const char = pattern[index];
-  if (char === "*" || char === "+" || char === "?") return true;
-  if (char !== "{") return false;
-  const end = pattern.indexOf("}", index + 1);
-  if (end === -1) return false;
-  return /^\{\d+(?:,\d*)?\}$/.test(pattern.slice(index, end + 1));
-}
-function isSafeRegexPattern(pattern) {
-  if (!pattern || pattern.length > MAX_PATTERN_LENGTH) return false;
-  const groups = [];
-  let escaped = false;
-  let inClass = false;
-  let hasBackreference = false;
-  let hasQuantifiedGroup = false;
-  let hasQuantifierInGroup = false;
-  let hasQuantifiedBackreference = false;
-  let unboundedRepeats = 0;
-  let previousWasQuantifier = false;
-  for (let index = 0; index < pattern.length; index += 1) {
-    const char = pattern[index];
-    const quantifierFollows = previousWasQuantifier;
-    previousWasQuantifier = false;
-    if (escaped) {
-      escaped = false;
-      if (!inClass && !/[dDwWsSbB]/.test(char) && !isRegexQuantifierStart(pattern, index + 1)) unboundedRepeats = 0;
-      continue;
-    }
-    if (char === "\\") {
-      const numericBackreference = /^[1-9]$/.test(pattern[index + 1] ?? "");
-      const namedBackreference = pattern[index + 1] === "k" ? pattern.slice(index + 2).match(/^<[^>]+>/)?.[0] : void 0;
-      if (numericBackreference || namedBackreference) {
-        hasBackreference = true;
-        const backreferenceEnd = numericBackreference ? index + 2 : index + 2 + namedBackreference.length;
-        if (isRegexQuantifierStart(pattern, backreferenceEnd)) {
-          hasQuantifiedBackreference = true;
-        }
-        index = backreferenceEnd - 1;
-      } else {
-        escaped = true;
-      }
-      continue;
-    }
-    if (char === "[") {
-      inClass = true;
-      continue;
-    }
-    if (char === "]") {
-      inClass = false;
-      continue;
-    }
-    if (inClass) continue;
-    if (char === "(") {
-      groups.push({ hasAlternation: false, hasQuantifier: false });
-      continue;
-    }
-    if (char === "|") {
-      const current = groups[groups.length - 1];
-      if (current) current.hasAlternation = true;
-      continue;
-    }
-    if (isRegexQuantifierStart(pattern, index)) {
-      if (char === "?" && pattern[index - 1] === "(") continue;
-      const current = groups[groups.length - 1];
-      if (current) {
-        current.hasQuantifier = true;
-        hasQuantifierInGroup = true;
-      }
-      if ((char === "+" || char === "*") && !quantifierFollows) unboundedRepeats += 1;
-      if (char === "{") {
-        const close = pattern.indexOf("}", index + 1);
-        const bounds = close > index ? pattern.slice(index + 1, close).split(",") : [];
-        if (bounds.length === 2 && (bounds[1].trim() === "" || Number(bounds[1]) > 16)) unboundedRepeats += 1;
-        index = close;
-      }
-      previousWasQuantifier = true;
-      continue;
-    }
-    if (char !== ")" && char !== "." && char !== "^" && char !== "$" && !isRegexQuantifierStart(pattern, index + 1)) {
-      unboundedRepeats = 0;
-    }
-    if (char === ")") {
-      const group = groups.pop();
-      if (!group) return false;
-      const quantified = isRegexOuterQuantifierStart(pattern, index + 1);
-      hasQuantifiedGroup = hasQuantifiedGroup || quantified;
-      if (quantified && (group.hasQuantifier || group.hasAlternation))
-        return false;
-      const parent = groups[groups.length - 1];
-      if (parent) {
-        parent.hasQuantifier = parent.hasQuantifier || group.hasQuantifier || quantified;
-        parent.hasAlternation = parent.hasAlternation || group.hasAlternation;
-      }
-    }
-  }
-  if (unboundedRepeats >= 2) return false;
-  return !escaped && !inClass && groups.length === 0 && !(hasBackreference && (hasQuantifiedGroup || hasQuantifierInGroup || hasQuantifiedBackreference));
-}
 var MAX_PATTERN_LENGTH = 1024;
 var MAX_CACHE_ENTRIES = 256;
 var regexCache = /* @__PURE__ */ new Map();
@@ -255,16 +154,8 @@ function cacheRegex(pattern, compiled) {
   }
   regexCache.set(pattern, compiled);
 }
-function safeRegexTestDetailed(pattern, input, executeUnsafePatterns) {
+function safeRegexTestDetailed(pattern, input) {
   if (!pattern || pattern.length > MAX_PATTERN_LENGTH) return { matched: false };
-  if (!executeUnsafePatterns && !isSafeRegexPattern(pattern)) {
-    try {
-      new RegExp(pattern);
-      return { matched: false, indeterminate: true };
-    } catch {
-      return { matched: false };
-    }
-  }
   if (regexCache.has(pattern)) {
     const cached = regexCache.get(pattern);
     return { matched: cached ? cached.test(input) : false };
@@ -279,16 +170,53 @@ function safeRegexTestDetailed(pattern, input, executeUnsafePatterns) {
   return { matched: compiled ? compiled.test(input) : false };
 }
 function safeRegexTest(pattern, input) {
-  return safeRegexTestDetailed(pattern, input, true).matched;
+  return safeRegexTestDetailed(pattern, input).matched;
+}
+function foldCase(text) {
+  let out = "";
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i], upper = char.toUpperCase();
+    out += upper.length !== 1 || char.charCodeAt(0) > 127 && upper.charCodeAt(0) < 128 ? char : upper;
+  }
+  return out;
+}
+var LINE_TERMINATOR = /[\n\r\u2028\u2029]/;
+function globPieceMatches(text, pattern) {
+  const pieces = pattern.split("_____");
+  if (pieces.length === 1) return text === pattern;
+  const first = pieces[0], last = pieces[pieces.length - 1];
+  if (text.length < first.length + last.length || !text.startsWith(first) || !text.endsWith(last)) return false;
+  const end = text.length - last.length;
+  let position = first.length;
+  for (let i = 1; i < pieces.length - 1; i += 1) {
+    const found = text.indexOf(pieces[i], position);
+    if (found < 0 || found + pieces[i].length > end) return false;
+    position = found + pieces[i].length;
+  }
+  return true;
+}
+function globMatches(text, pattern) {
+  if (!LINE_TERMINATOR.test(text) && !LINE_TERMINATOR.test(pattern)) return globPieceMatches(text, pattern);
+  const textParts = text.split(/([\n\r\u2028\u2029])/), patternParts = pattern.split(/([\n\r\u2028\u2029])/);
+  if (textParts.length !== patternParts.length) return false;
+  return textParts.every((part, i) => i % 2 ? part === patternParts[i] : globPieceMatches(part, patternParts[i]));
 }
 function evalSimpleUrlPart(actual, pattern, isPath) {
-  try {
-    let escaped = pattern.replace(/[*.+?^${}()|[\]\\]/g, "\\$&").replace(/_____/g, ".*");
-    if (isPath) escaped = "\\/?" + escaped.replace(/(^\/|\/$)/g, "") + "\\/?";
-    return new RegExp("^" + escaped + "$", "i").test(actual);
-  } catch {
-    return false;
+  let core = pattern;
+  if (isPath) {
+    if (core.startsWith("/")) core = core.slice(1);
+    if (core.endsWith("/")) core = core.slice(0, -1);
   }
+  const text = foldCase(actual), folded = foldCase(core);
+  if (!isPath) return globMatches(text, folded);
+  const lead = text.startsWith("/") ? [0, 1] : [0];
+  for (const start of lead) {
+    const rest = text.slice(start);
+    for (const end of rest.endsWith("/") ? [0, 1] : [0]) {
+      if (globMatches(rest.slice(0, rest.length - end), folded)) return true;
+    }
+  }
+  return false;
 }
 function evalSimpleUrlTarget(actual, pattern) {
   try {
@@ -307,8 +235,7 @@ function evalSimpleUrlTarget(actual, pattern) {
 function unescapeRegexLiteral(value) {
   return value.replace(/\\([.*+?^${}()|[\]\\\/])/g, "$1");
 }
-function evaluateUrlRuleDetailed(url, rule, options) {
-  const executeUnsafePatterns = options?.executeUnsafePatterns !== false;
+function evaluateUrlRuleDetailed(url, rule) {
   try {
     const parsed = new URL(url, "https://_");
     const matchType = rule.matchType ?? rule.match_type;
@@ -319,34 +246,14 @@ function evaluateUrlRuleDetailed(url, rule, options) {
     }
     if (rule.type === "regex") {
       const escaped = rule.pattern.replace(/([^\\])\//g, "$1\\/");
-      const absolute = safeRegexTestDetailed(escaped, parsed.href, executeUnsafePatterns);
-      if (absolute.matched || absolute.indeterminate) return absolute;
-      return safeRegexTestDetailed(escaped, parsed.href.substring(parsed.origin.length), executeUnsafePatterns);
+      const absolute = safeRegexTestDetailed(escaped, parsed.href);
+      if (absolute.matched) return absolute;
+      return safeRegexTestDetailed(escaped, parsed.href.substring(parsed.origin.length));
     }
     return { matched: evalSimpleUrlTarget(parsed, rule.pattern) };
   } catch {
     return { matched: false };
   }
-}
-function regexRequiresClientEvaluation(pattern) {
-  if (!pattern || pattern.length > MAX_PATTERN_LENGTH || isSafeRegexPattern(pattern)) return false;
-  try {
-    new RegExp(pattern);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function urlRuleRequiresClientEvaluation(rule) {
-  if (!rule || rule.type !== "regex" || typeof rule.pattern !== "string") return false;
-  if ((rule.matchType ?? rule.match_type) === "contains") return false;
-  return regexRequiresClientEvaluation(rule.pattern.replace(/([^\\])\//g, "$1\\/"));
-}
-function segmentConditionRequiresClientEvaluation(condition, expected = condition.value) {
-  const first = stringValues(expected)[0] ?? "";
-  if (condition.operator === "matches_regex") return regexRequiresClientEvaluation(first);
-  if (condition.operator === "matches_wildcard") return regexRequiresClientEvaluation(wildcard(first));
-  return false;
 }
 var LEGACY_RAW_QUERY_OPERATORS = /* @__PURE__ */ new Set(["contains", "not_contains", "starts_with", "ends_with"]);
 function resolveUrlQueryConditionOperands(condition, search) {
@@ -378,8 +285,14 @@ function compareNumber(actual, expected, predicate) {
   const b = Number(Array.isArray(expected) ? expected[0] : expected);
   return Number.isFinite(a) && Number.isFinite(b) && predicate(a, b);
 }
-function wildcard(pattern) {
+function wildcardRegexSource(pattern) {
   return "^" + pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$";
+}
+function segmentConditionRegexSource(condition, expected = condition.value) {
+  const first = stringValues(expected)[0] ?? "";
+  if (condition.operator === "matches_regex") return first;
+  if (condition.operator === "matches_wildcard") return wildcardRegexSource(first);
+  return null;
 }
 function matchSegmentConditionValues(condition, actual, expected = condition.value) {
   const actualValues = stringValues(actual);
@@ -407,7 +320,7 @@ function matchSegmentConditionValues(condition, actual, expected = condition.val
     case "not_in":
       return !actualValues.some((value) => expectedValues.includes(value));
     case "matches_wildcard":
-      return actualValues.some((value) => safeRegexTest(wildcard(first), value));
+      return actualValues.some((value) => safeRegexTest(wildcardRegexSource(first), value));
     case "matches_regex":
       return actualValues.some((value) => safeRegexTest(first, value));
     case "greater_than":
@@ -421,6 +334,283 @@ function matchSegmentConditionValues(condition, actual, expected = condition.val
     default:
       return false;
   }
+}
+
+// ../shared-runtime/src/regex-safety.ts
+function isRegexOuterQuantifierStart(pattern, index) {
+  return pattern[index] !== "?" && isRegexQuantifierStart(pattern, index);
+}
+function isRegexQuantifierStart(pattern, index) {
+  const char = pattern[index];
+  if (char === "*" || char === "+" || char === "?") return true;
+  if (char !== "{") return false;
+  const end = pattern.indexOf("}", index + 1);
+  if (end === -1) return false;
+  return /^\{\d+(?:,\d*)?\}$/.test(pattern.slice(index, end + 1));
+}
+var MAX_BOUNDED_BITS = 12;
+var INPUT_BITS = 14;
+var MAX_WORK_BITS = 31;
+function runTooCostly(run, unanchored) {
+  const unbounded = run.unbounded + (unanchored ? 1 : 0);
+  return unbounded > 2 || run.bits > MAX_BOUNDED_BITS || unbounded === 2 && run.bits > 1;
+}
+function atomsOverlap(separator, atoms) {
+  if (atoms.length === 0) return false;
+  if (separator === "." || /[^\x00-\x7f]|^\[\^|\\[DWSsuxcpPk0-9]/.test(separator)) return true;
+  try {
+    const sep = new RegExp(`^(?:${separator})$`);
+    const repeats = atoms.map((atom) => new RegExp(`^(?:${atom})$`));
+    for (let code = 0; code < 128; code += 1) {
+      const char = String.fromCharCode(code);
+      if (sep.test(char) && repeats.some((atom) => atom.test(char))) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+function escapeEnd(pattern, index) {
+  const rest = pattern.slice(index + 1);
+  const multi = rest.match(/^(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|c[A-Za-z]|0[0-7]{0,2})/)?.[0];
+  return index + 1 + (multi?.length ?? 1);
+}
+var scanCache = /* @__PURE__ */ new Map();
+function scanRegex(pattern) {
+  const cached = scanCache.get(pattern);
+  if (cached) return cached;
+  const scan = scanRegexUncached(pattern);
+  if (scanCache.size >= 256) scanCache.delete(scanCache.keys().next().value);
+  scanCache.set(pattern, scan);
+  return scan;
+}
+function isSafeRegexPattern(pattern) {
+  if (!pattern || pattern.length > MAX_PATTERN_LENGTH) return false;
+  const scan = scanRegex(pattern);
+  const choiceBits = Math.log2(Math.max(scan.choiceWork, 1));
+  return scan.ok && scan.adjacent < 2 && !scan.costs.some((cost) => runTooCostly(cost, scan.unanchored) || cost.bits > 0 && (cost.unbounded + (scan.unanchored ? 1 : 0)) * INPUT_BITS + cost.bits + choiceBits > MAX_WORK_BITS);
+}
+function literalAlternativesExclusive(content) {
+  if (!/^(?:[^\\[\](){}|*+?.^$]|\\[^A-Za-z0-9|]|\|)*$/.test(content) || /[^\x00-\x7f]/.test(content)) return false;
+  const alternatives = content.split("|").map((alternative) => alternative.replace(/\\(.)/g, "$1").toLowerCase());
+  return alternatives.every((a, i) => a.length > 0 && alternatives.every((b, j) => i === j || !b.startsWith(a)));
+}
+function scanRegexUncached(pattern) {
+  const unsafe = { ok: false, adjacent: 0, unanchored: true, costs: [], choiceWork: 0 };
+  let adjacentMax = 0;
+  const groups = [];
+  let classStart = -1;
+  let hasBackreference = false;
+  let hasQuantifiedGroup = false;
+  let hasQuantifierInGroup = false;
+  let hasQuantifiedBackreference = false;
+  let run = { adjacent: 0, unbounded: 0, bits: 0, atoms: [], own: 0 };
+  const runCosts = [];
+  const record = () => {
+    runCosts.push({ unbounded: run.unbounded, bits: run.bits });
+    for (const group of groups) {
+      if (group.lookaround) group.inner = { unbounded: Math.max(group.inner.unbounded, run.unbounded), bits: Math.max(group.inner.bits, run.bits) };
+    }
+  };
+  let topLevelAlternation = false;
+  const merge = (runs) => ({
+    adjacent: Math.max(...runs.map((r) => r.adjacent)),
+    unbounded: Math.max(...runs.map((r) => r.unbounded)),
+    bits: Math.max(...runs.map((r) => r.bits)),
+    atoms: [...new Set(runs.flatMap((r) => r.atoms))],
+    // A later separator closes the merged run only when every alternative is open; the largest
+    // count would let an open branch erase what a closed one carries (#16795 round 74:
+    // ^/(?:[a-z]*x[a-z]*1|[a-z]*x)2[a-z]*x[a-z]*3$).
+    own: Math.min(...runs.map((r) => r.own))
+  });
+  let atom = "";
+  let atomSize = 1, choiceWork = 0;
+  const grow = (size) => {
+    const innermost = groups[groups.length - 1];
+    if (innermost) innermost.cur += size;
+  };
+  const noteAtom = (source) => {
+    atom = source;
+    atomSize = 1;
+    grow(1);
+    for (const group of groups) group.atoms.add(source);
+  };
+  let previousWasQuantifier = false;
+  const separate = (source, literal, next) => {
+    if (isRegexQuantifierStart(pattern, next)) return;
+    const overlaps = atomsOverlap(source, run.atoms);
+    if (literal || !overlaps) run = { ...run, adjacent: 0 };
+    if (!overlaps) run = { adjacent: run.adjacent, unbounded: run.unbounded - (run.own > 0 ? 1 : 0), bits: run.bits, atoms: [], own: 0 };
+  };
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    const quantifierFollows = previousWasQuantifier;
+    previousWasQuantifier = false;
+    if (classStart >= 0) {
+      if (char === "\\") {
+        index += 1;
+      } else if (char === "]") {
+        noteAtom(pattern.slice(classStart, index + 1));
+        classStart = -1;
+        separate(atom, false, index + 1);
+      }
+      continue;
+    }
+    if (char === "\\") {
+      const numericBackreference = pattern.slice(index + 1).match(/^[1-9][0-9]*/)?.[0];
+      const namedBackreference = pattern[index + 1] === "k" ? pattern.slice(index + 2).match(/^<[^>]+>/)?.[0] : void 0;
+      if (numericBackreference || namedBackreference) {
+        hasBackreference = true;
+        const backreferenceEnd = numericBackreference ? index + 1 + numericBackreference.length : index + 2 + namedBackreference.length;
+        if (isRegexQuantifierStart(pattern, backreferenceEnd)) {
+          hasQuantifiedBackreference = true;
+        }
+        noteAtom("[\\s\\S]");
+        index = backreferenceEnd - 1;
+        continue;
+      }
+      if (index + 1 >= pattern.length) return unsafe;
+      const start = index;
+      const end = escapeEnd(pattern, start);
+      const kind = pattern[start + 1];
+      index = end - 1;
+      if (kind === "b" || kind === "B") continue;
+      noteAtom(pattern.slice(start, end));
+      separate(atom, !/[dDwWsS]/.test(kind), end);
+      continue;
+    }
+    if (char === "[") {
+      classStart = index;
+      continue;
+    }
+    if (char === "(") {
+      const prefix = pattern.slice(index + 1).match(/^\?(?::|=|!|<=|<!|<[^>]*>)/)?.[0] ?? "";
+      if (!prefix && pattern[index + 1] === "?") return unsafe;
+      const lookaround = /^\?(?:=|!|<=|<!)$/.test(prefix);
+      const fresh = { adjacent: 0, unbounded: 0, bits: 0, atoms: [], own: 0 };
+      groups.push({ cur: 0, best: 0, content: index + 1 + prefix.length, hasAlternation: false, hasQuantifier: false, start: lookaround ? fresh : run, branches: [], atoms: /* @__PURE__ */ new Set(), lookaround, outer: run, inner: { unbounded: 0, bits: 0 } });
+      if (lookaround) run = fresh;
+      index += prefix.length;
+      continue;
+    }
+    if (char === "|") {
+      const current = groups[groups.length - 1];
+      if (current) {
+        current.hasAlternation = true;
+        current.best = Math.max(current.best, current.cur);
+        current.cur = 0;
+        current.branches.push(run);
+        run = current.start;
+      } else {
+        topLevelAlternation = true;
+        run = { adjacent: 0, unbounded: 0, bits: 0, atoms: [], own: 0 };
+      }
+      continue;
+    }
+    if (isRegexQuantifierStart(pattern, index)) {
+      const current = groups[groups.length - 1];
+      if (current) {
+        current.hasQuantifier = true;
+        hasQuantifierInGroup = true;
+      }
+      let bits = 0;
+      let unbounded = false;
+      let adjacentRepeat = false;
+      let times = 1;
+      if (char === "{") {
+        const close = pattern.indexOf("}", index + 1);
+        const [min, max] = pattern.slice(index + 1, close).split(",");
+        if (max === void 0) {
+          bits = 0;
+          times = Number(min);
+        } else if (max.trim() === "") {
+          unbounded = true;
+          adjacentRepeat = true;
+          times = Math.max(Number(min), 1);
+        } else {
+          bits = Number(max) > Number(min) ? Math.log2(Number(max) - Number(min) + 1) : 0;
+          adjacentRepeat = Number(max) > 16;
+          times = Number(max);
+        }
+        index = close;
+      } else if (!quantifierFollows) {
+        if (char === "?") bits = 1;
+        else {
+          unbounded = true;
+          adjacentRepeat = true;
+        }
+      }
+      if (times > 1) grow(atomSize * (times - 1));
+      if (bits > 0) choiceWork += atomSize * Math.max(times, 1);
+      if (unbounded || bits > 0) {
+        run = { adjacent: run.adjacent + (adjacentRepeat ? 1 : 0), unbounded: run.unbounded + (unbounded ? 1 : 0), bits: run.bits + bits, atoms: [.../* @__PURE__ */ new Set([...run.atoms, atom])], own: run.own + (unbounded ? 1 : 0) };
+        record();
+      }
+      adjacentMax = Math.max(adjacentMax, run.adjacent);
+      previousWasQuantifier = true;
+      continue;
+    }
+    if (char === ")") {
+      const group = groups.pop();
+      if (!group) return unsafe;
+      const quantified = isRegexOuterQuantifierStart(pattern, index + 1);
+      hasQuantifiedGroup = hasQuantifiedGroup || quantified;
+      if (quantified && (group.hasQuantifier || group.hasAlternation))
+        return unsafe;
+      const next = pattern[index + 1];
+      const optional = !group.lookaround && (next === "?" || next === "*" || next === "{" && /^\{0+(?:,\d*)?\}/.test(pattern.slice(index + 1)));
+      let groupRun = merge([...group.branches, run, ...optional ? [group.start] : []]);
+      const size = Math.max(group.best, group.cur);
+      if (group.branches.length) {
+        const choices = literalAlternativesExclusive(pattern.slice(group.content, index)) ? 0 : Math.log2(group.branches.length + 1);
+        if (choices) choiceWork += size * (group.branches.length + 1);
+        groupRun = { ...groupRun, bits: groupRun.bits + choices, atoms: [.../* @__PURE__ */ new Set([...groupRun.atoms, ...group.atoms])] };
+      }
+      if (group.lookaround) {
+        const inner = { unbounded: Math.max(group.inner.unbounded, groupRun.unbounded), bits: Math.max(group.inner.bits, groupRun.bits) };
+        run = { ...group.outer, unbounded: group.outer.unbounded + inner.unbounded, bits: group.outer.bits + inner.bits, own: group.outer.own + inner.unbounded };
+      } else run = groupRun;
+      record();
+      adjacentMax = Math.max(adjacentMax, run.adjacent);
+      atom = group.atoms.size ? `(?:${[...group.atoms].join("|")})` : "[\\s\\S]";
+      atomSize = Math.max(size, 1);
+      grow(size);
+      const parent = groups[groups.length - 1];
+      if (parent) {
+        parent.hasQuantifier = parent.hasQuantifier || group.hasQuantifier || quantified;
+        parent.hasAlternation = parent.hasAlternation || group.hasAlternation;
+      }
+      continue;
+    }
+    if (char === "^" || char === "$") continue;
+    noteAtom(char === "." ? "." : char.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"));
+    separate(atom, char !== ".", index + 1);
+  }
+  const ok = classStart < 0 && groups.length === 0 && !(hasBackreference && (hasQuantifiedGroup || hasQuantifierInGroup || hasQuantifiedBackreference));
+  return { ok, adjacent: adjacentMax, unanchored: pattern[0] !== "^" || topLevelAlternation, costs: runCosts, choiceWork };
+}
+function regexRequiresClientEvaluation(pattern) {
+  if (!pattern || pattern.length > MAX_PATTERN_LENGTH || isSafeRegexPattern(pattern)) return false;
+  try {
+    new RegExp(pattern);
+    return true;
+  } catch {
+    return SCOPED_MODIFIER_GROUP.test(pattern);
+  }
+}
+var SCOPED_MODIFIER_GROUP = /\(\?(?:[a-z]+(?:-[a-z]*)?|-[a-z]+):/;
+function urlRuleRequiresClientEvaluation(rule) {
+  if (!rule || rule.type !== "regex" || typeof rule.pattern !== "string") return false;
+  if ((rule.matchType ?? rule.match_type) === "contains") return false;
+  return regexRequiresClientEvaluation(rule.pattern.replace(/([^\\])\//g, "$1\\/"));
+}
+function segmentConditionRequiresClientEvaluation(condition, expected = condition.value) {
+  const source = segmentConditionRegexSource(condition, expected);
+  return source !== null && regexRequiresClientEvaluation(source);
+}
+function evaluateUrlRuleOnServer(url, rule) {
+  if (urlRuleRequiresClientEvaluation(rule)) return { matched: false, indeterminate: true };
+  return evaluateUrlRuleDetailed(url, rule);
 }
 
 // ../shared-runtime/src/worker-targeting.ts
@@ -886,7 +1076,7 @@ function makeVisitorCookie(value) {
 }
 function evalUrlRule(url, rule) {
   if (!rule || typeof rule.pattern !== "string" || !rule.pattern) return false;
-  return evaluateUrlRuleDetailed(url, rule, { executeUnsafePatterns: false }).matched;
+  return evaluateUrlRuleOnServer(url, rule).matched;
 }
 function edgeUrlRuleRequiresClientEvaluation2(rule) {
   return Boolean(
@@ -2065,7 +2255,7 @@ function classifyRequest(request) {
 }
 
 // src/version.ts
-var EDGE_WORKER_VERSION = "1.2.20";
+var EDGE_WORKER_VERSION = "1.2.21";
 var MINIMUM_COMPATIBLE_ENGINE_VERSION_FIELD = "minimumEdgeEngineVersion";
 function parseVersion(value) {
   const match = value.trim().match(

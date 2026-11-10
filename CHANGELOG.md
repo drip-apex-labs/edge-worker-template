@@ -2,6 +2,11 @@
 
 Changes to the Apex Edge Worker, newest first, in Keep a Changelog format.
 
+## [1.2.21] - 2026-11-07
+
+### Security
+- Merchant regex URL rules that could backtrack catastrophically on a visitor's URL (overlapping repeats, chains of separated repeats, alternation chains, lookarounds, unanchored repeat chains) are no longer evaluated at the edge; the Apex SDK decides them in the browser. Simple wildcard rules match without a regex, so many wildcards no longer slow the edge. (#16795)
+
 ## [1.2.20] - 2026-11-05
 
 ### Security
