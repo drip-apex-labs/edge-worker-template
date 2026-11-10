@@ -2,6 +2,11 @@
 
 Changes to the Apex Edge Worker, newest first, in Keep a Changelog format.
 
+## [1.2.22] - 2026-11-10
+
+### Privacy
+- Shops whose data protection storage mode is "memory" get no `drip_uid` and no `drip_xgroups_v1` cookie from the edge: not on proxied pages, redirects, `/assign`, baseline views or after a failed config read. In memory mode the edge makes no assignment and serves the page SDK-only, so the SDK is the page's only visitor identity. Default mode and strict consent are unchanged. (#17058)
+
 ## [1.2.21] - 2026-11-07
 
 ### Security
