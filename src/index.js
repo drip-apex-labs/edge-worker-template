@@ -1,4 +1,4 @@
-// Apex Edge Worker v1.2.22 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
+// Apex Edge Worker v1.2.23 — generated from drip-apex-labs/Apex packages/edge-worker — do not edit here.
 // src/limits.ts
 var DEFAULT_ORIGIN_FETCH_TIMEOUT_MS = 5e3;
 var DEFAULT_MAX_MUTATION_BYTES = 256 * 1024;
@@ -681,6 +681,59 @@ function edgePageRuleIsUrlDriven(rule) {
   const mode = rule.trigger?.mode;
   return !rule.advancedCondition?.code?.trim() && !rule.trigger?.triggerJs?.trim() && mode !== "manual-callback" && mode !== "manual-api" && !edgeUrlRulesRequireClientEvaluation(rule.includeRules) && !edgeUrlRulesRequireClientEvaluation(rule.excludeRules);
 }
+function evalUrlRule(url, rule) {
+  if (!rule || typeof rule.pattern !== "string" || !rule.pattern) return false;
+  return evaluateUrlRuleOnServer(url, rule).matched;
+}
+function matchUrlRules(url, rules) {
+  if (!rules.length) return true;
+  let hasInclude = false;
+  let included = false;
+  for (const rule of rules) {
+    const matched = evalUrlRule(url, rule);
+    if (rule.include === false) {
+      if (matched) return false;
+    } else {
+      hasInclude = true;
+      if (matched) included = true;
+    }
+  }
+  return included || !hasInclude;
+}
+function matchEdgePageRule(url, rule) {
+  if (rule.disabled || rule.trigger?.disabled) return false;
+  const includeRules = Array.isArray(rule.includeRules) ? rule.includeRules : [];
+  const excludeRules = Array.isArray(rule.excludeRules) ? rule.excludeRules.map((item) => ({ ...item, include: false })) : [];
+  return matchUrlRules(url, [...includeRules, ...excludeRules]);
+}
+function matchEdgePageRules(url, rules, mode) {
+  if (!rules.length) return true;
+  let hasInclude = false;
+  let included = false;
+  let allIncludedMatched = true;
+  for (const rule of rules) {
+    const matched = matchEdgePageRule(url, rule);
+    if (rule.include === false) {
+      if (matched) return false;
+    } else {
+      hasInclude = true;
+      if (matched) included = true;
+      else allIncludedMatched = false;
+    }
+  }
+  return !hasInclude || (mode === "all" ? allIncludedMatched : included);
+}
+function matchesEdgeUrlTargeting(targeting, url) {
+  if (!targeting) return true;
+  if (!edgeUrlTargetingIsWorkerReproducible(targeting)) return false;
+  if (Array.isArray(targeting.url) && !matchUrlRules(url, targeting.url)) {
+    return false;
+  }
+  if (Array.isArray(targeting.pageRules) && !matchEdgePageRules(url, targeting.pageRules, targeting.pageMatchMode)) {
+    return false;
+  }
+  return true;
+}
 function edgeSegmentConditionOperands(url, context, condition) {
   let parsed;
   try {
@@ -1073,10 +1126,6 @@ function parseCookieValue(cookieHeader, key) {
 function makeVisitorCookie(value) {
   return DRIP_UID_COOKIE + "=" + encodeURIComponent(value) + "; Max-Age=31536000; Path=/; SameSite=Lax";
 }
-function evalUrlRule(url, rule) {
-  if (!rule || typeof rule.pattern !== "string" || !rule.pattern) return false;
-  return evaluateUrlRuleOnServer(url, rule).matched;
-}
 function edgeUrlRuleRequiresClientEvaluation2(rule) {
   return Boolean(
     rule && typeof rule === "object" && typeof rule.pattern === "string" && rule.pattern && urlRuleRequiresClientEvaluation(rule)
@@ -1084,55 +1133,6 @@ function edgeUrlRuleRequiresClientEvaluation2(rule) {
 }
 function edgeUrlRulesRequireClientEvaluation2(rules) {
   return Array.isArray(rules) && rules.some(edgeUrlRuleRequiresClientEvaluation2);
-}
-function matchUrlRules(url, rules) {
-  if (!rules.length) return true;
-  let hasInclude = false;
-  let included = false;
-  for (const rule of rules) {
-    const matched = evalUrlRule(url, rule);
-    if (rule.include === false) {
-      if (matched) return false;
-    } else {
-      hasInclude = true;
-      if (matched) included = true;
-    }
-  }
-  return included || !hasInclude;
-}
-function matchEdgePageRule(url, rule) {
-  if (rule.disabled || rule.trigger?.disabled) return false;
-  const includeRules = Array.isArray(rule.includeRules) ? rule.includeRules : [];
-  const excludeRules = Array.isArray(rule.excludeRules) ? rule.excludeRules.map((item) => ({ ...item, include: false })) : [];
-  return matchUrlRules(url, [...includeRules, ...excludeRules]);
-}
-function matchEdgePageRules(url, rules, mode) {
-  if (!rules.length) return true;
-  let hasInclude = false;
-  let included = false;
-  let allIncludedMatched = true;
-  for (const rule of rules) {
-    const matched = matchEdgePageRule(url, rule);
-    if (rule.include === false) {
-      if (matched) return false;
-    } else {
-      hasInclude = true;
-      if (matched) included = true;
-      else allIncludedMatched = false;
-    }
-  }
-  return !hasInclude || (mode === "all" ? allIncludedMatched : included);
-}
-function matchesEdgeUrlTargeting(targeting, url) {
-  if (!targeting) return true;
-  if (!edgeUrlTargetingIsWorkerReproducible(targeting)) return false;
-  if (Array.isArray(targeting.url) && !matchUrlRules(url, targeting.url)) {
-    return false;
-  }
-  if (Array.isArray(targeting.pageRules) && !matchEdgePageRules(url, targeting.pageRules, targeting.pageMatchMode)) {
-    return false;
-  }
-  return true;
 }
 function parseForceMapValue(raw) {
   return raw ? parseForceString(raw) ?? {} : {};
@@ -2260,7 +2260,7 @@ function classifyRequest(request) {
 }
 
 // src/version.ts
-var EDGE_WORKER_VERSION = "1.2.22";
+var EDGE_WORKER_VERSION = "1.2.23";
 var MINIMUM_COMPATIBLE_ENGINE_VERSION_FIELD = "minimumEdgeEngineVersion";
 function parseVersion(value) {
   const match = value.trim().match(

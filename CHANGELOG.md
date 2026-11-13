@@ -2,6 +2,11 @@
 
 Changes to the Apex Edge Worker, newest first, in Keep a Changelog format.
 
+## [1.2.23] - 2026-11-12
+
+### Changed
+- The canonical URL, page and composed targeting matchers moved into the shared runtime so historical profit planning can reuse them; matching behavior is unchanged. (#11423)
+
 ## [1.2.22] - 2026-11-10
 
 ### Privacy
